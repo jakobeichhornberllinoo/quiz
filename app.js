@@ -61,6 +61,7 @@ function randomName() {
 }
 const AVATARS = ['🦊', '🐼', '🐸', '🦉', '🐙', '🦁', '🐯', '🐨', '🐵', '🐧', '🦄', '🐢',
   '🐝', '🦋', '🐬', '🦖', '🐳', '🦔', '🐺', '🐮', '🐷', '🐰', '🦩', '🦜'];
+const SHOW_TITLE = 'Wer wird Tutoriumsmeister?';   // Standard-Name fürs Show-Intro (im Editor änderbar)
 const INTRO_MS = 4000;   // Frage wird vorgelesen, bevor die Antworten erscheinen (muss zu style.css .intro-bar passen)
 const GRACE_MS = 2500;   // Nach Ablauf der Zeit noch auf unterwegs befindliche Antworten warten (mobile Daten!)
 const RING_LEN = 2 * Math.PI * 45;
@@ -377,12 +378,128 @@ const Sound = {
     if (song.snare.includes(s)) this.drum('snare', t);
     if (song.hat.includes(s)) this.drum('hat', t);
   },
-  own: { question: false, lobby: false },   // eigene MP3 statt der eingebauten Songs (setzt der Host)
+  // ---- Show-Intro im Stil einer TV-Quizshow (eigene Komposition, keine fremde Melodie) ----
+  // 0–2,4 s: Trommelwirbel + ansteigendes Rauschen + steigender Ton → 2,45 s: großer Schlag (Logo erscheint)
+  // → drei Akkord-Stöße → Schlussakkord → danach leiser Herzschlag als Spannungsteppich, bis „Los geht's“.
+  SHOW_HIT: 2.45,
+  brass(midis, t, dur, vol) {
+    midis.forEach(m => [-6, 6].forEach(det => {
+      const o = this.ctx.createOscillator(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(440 * Math.pow(2, (m - 69) / 12), t);
+      o.detune.setValueAtTime(det, t);
+      f.type = 'lowpass';
+      f.frequency.setValueAtTime(600, t);
+      f.frequency.exponentialRampToValueAtTime(3200, t + 0.06);
+      f.frequency.exponentialRampToValueAtTime(900, t + dur);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(f).connect(g).connect(this.bus);
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }));
+  },
+  crash(t, dur, vol) {
+    if (!this.noise) this.drum('hat', t);   // legt den Rausch-Puffer an
+    const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+    s.buffer = this.noise;
+    s.loop = true;
+    f.type = 'highpass';
+    f.frequency.value = 3500;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f).connect(g).connect(this.bus);
+    s.start(t);
+    s.stop(t + dur + 0.05);
+  },
+  startShow() {
+    this.stopMusic();   // alten Herzschlag/Bus sicher beenden
+    this.bus = this.ctx.createGain();
+    this.bus.gain.value = 1;
+    this.bus.connect(this.ctx.destination);
+    const t0 = this.ctx.currentTime + 0.05, hit = t0 + this.SHOW_HIT;
+    // Rauschen, das von dumpf nach hell anschwillt
+    if (!this.noise) this.drum('hat', t0);
+    const ns = this.ctx.createBufferSource(), nf = this.ctx.createBiquadFilter(), ng = this.ctx.createGain();
+    ns.buffer = this.noise; ns.loop = true;
+    nf.type = 'bandpass'; nf.Q.value = 1.2;
+    nf.frequency.setValueAtTime(300, t0); nf.frequency.exponentialRampToValueAtTime(7000, hit);
+    ng.gain.setValueAtTime(0.0001, t0); ng.gain.exponentialRampToValueAtTime(0.22, hit - 0.05); ng.gain.exponentialRampToValueAtTime(0.0001, hit + 0.05);
+    ns.connect(nf).connect(ng).connect(this.bus);
+    ns.start(t0); ns.stop(hit + 0.1);
+    // steigender Synth-Ton
+    const so = this.ctx.createOscillator(), sg = this.ctx.createGain();
+    so.type = 'sawtooth';
+    so.frequency.setValueAtTime(110, t0); so.frequency.exponentialRampToValueAtTime(880, hit);
+    sg.gain.setValueAtTime(0.0001, t0); sg.gain.exponentialRampToValueAtTime(0.06, hit - 0.05); sg.gain.exponentialRampToValueAtTime(0.0001, hit);
+    so.connect(sg).connect(this.bus);
+    so.start(t0); so.stop(hit + 0.05);
+    // Trommelwirbel, der immer schneller wird
+    for (let t = t0, gap = 0.28; t < hit - 0.03; t += gap, gap = Math.max(0.045, gap * 0.86)) this.drum('snare', t);
+    // DER SCHLAG: Pauke + Becken + Bläserakkord (d-Moll)
+    this.drum('kick', hit); this.drum('kick', hit + 0.01);
+    this.crash(hit, 2.2, 0.16);
+    this.brass([50, 53, 57, 62, 69], hit, 1.1, 0.045);
+    // drei Stöße: B – C – d (dramatische Kadenz)
+    [[0.75, [46, 50, 53, 58]], [1.1, [48, 52, 55, 60]]].forEach(([d, ch]) => { this.drum('kick', hit + d); this.brass(ch, hit + d, 0.32, 0.04); });
+    this.drum('kick', hit + 1.5); this.crash(hit + 1.5, 3, 0.12);
+    this.brass([38, 50, 57, 62, 65, 69], hit + 1.5, 3.2, 0.05);
+    // Herzschlag-Teppich, solange das Logo steht
+    let beat = hit + 5;
+    this.music = setInterval(() => {
+      while (beat < this.ctx.currentTime + 0.3) {
+        this.note(38, beat, 0.25, 'sine', 0.22); this.note(38, beat + 0.22, 0.2, 'sine', 0.15);
+        beat += 1.1;
+      }
+    }, 100);
+  },
+  cur: null,
+  // Welche Musik in welcher Spielphase läuft:
+  //   Frage vorlesen + Zeit läuft (intro, question) → Frage-Song; startet bei jeder neuen Frage von vorn
+  //                                                   und läuft durch bis zur Auflösung (ohne MP3: eingebauter Song)
+  //   Warteraum, Auflösung, Zwischenstand           → Ergebnis-MP3 (läuft durch), ohne MP3: eingebauter Song nur im Warteraum
+  //   Show-Intro → Intro-Sound, Siegerehrung → keine (dort kommt der Siegersong)
+  phaseMusic(phase) {
+    const want = phase === 'question' || phase === 'intro' ? 'count'
+      : phase === 'end' ? null
+        : phase === 'show' ? 'show'
+        : OwnMusic.ready ? 'between' : phase === 'lobby' ? 'lobby' : null;
+    if (want === this.cur && (this.music || !want)) return;   // läuft schon – nicht neu starten
+    this.stopMusic();
+    this.cur = want;
+    if (!want || !this.on || !this.ctx) return;
+    if (want === 'count') {
+      if (CountMusic.ready) {
+        CountMusic.restart();   // neue Frage → Song von „Start bei“ an
+        this.music = CountMusic;
+      } else this.startMusic('question');
+    }
+    else if (want === 'between') { OwnMusic.play(); this.music = OwnMusic; }
+    else if (want === 'show') { /* startet renderShow über playShow – damit Ton und Animation zusammenpassen */ }
+    else this.startMusic('lobby');
+  },
+  // Show-Intro: eigener Intro-Sound ab „Start bei“; onGo(Sekunden bis zum Knall) startet die Animation.
+  // Ohne MP3 (oder wenn sie nicht abspielt) kommt der eingebaute Intro-Sound.
+  async playShow(startSec, hitSec, onGo) {
+    const my = this.showTok = (this.showTok || 0) + 1;   // ein neuerer Aufruf gewinnt
+    if (!this.on || !this.ctx) return onGo(0.3);
+    if (IntroMusic.ready) {
+      this.stopMusic();
+      this.music = IntroMusic;
+      const ok = await IntroMusic.playFrom(startSec);
+      if (my !== this.showTok || this.cur !== 'show' || this.music !== IntroMusic) return;   // inzwischen weitergeklickt
+      if (ok) return onGo(Math.max(0.3, (hitSec || 0) - (startSec || 0)));
+      IntroMusic.pause();
+    }
+    this.startShow();
+    onGo(this.SHOW_HIT);
+  },
+  silence() { this.stopMusic(); this.cur = null; },
   startPreview(kind, idx) { this.startMusic(kind, idx); },
   startMusic(kind = 'question', fixed) {
     this.stopMusic();
     if (!this.on || !this.ctx) return;
-    if (!Number.isInteger(fixed) && this.own[kind] && OwnMusic.ready) { OwnMusic.play(); this.music = 'own'; return; }
     // zufälliger Song, aber nie zweimal derselbe hintereinander
     const list = this.SONGS[kind] || this.SONGS.question;
     let pick = Number.isInteger(fixed) ? fixed : Math.floor(Math.random() * list.length);
@@ -401,7 +518,7 @@ const Sound = {
     }, 25);
   },
   stopMusic() {
-    if (this.music === 'own') OwnMusic.pause(); else clearInterval(this.music);
+    if (this.music && this.music.pause) this.music.pause(); else clearInterval(this.music);
     this.music = null;
     if (this.bus && this.ctx) {
       const bus = this.bus;
@@ -654,9 +771,13 @@ function fromModel(m) {
 }
 
 const fmtMMSS = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+// „4:00“ = 4 Minuten, „7“ oder „0:07“ = 7 Sekunden (eine Zahl ohne Doppelpunkt sind Sekunden)
 function parseMMSS(v) {
-  const m = String(v).trim().match(/^(\d{1,2})(?::([0-5]?\d))?$/);
-  return m ? (+m[1]) * 60 + (+(m[2] || 0)) : null;
+  const s = String(v).trim();
+  let m = s.match(/^(\d{1,4})$/);
+  if (m) return +m[1];
+  m = s.match(/^(\d{1,2}):([0-5]?\d)$/);
+  return m ? (+m[1]) * 60 + (+m[2]) : null;
 }
 
 /* ===================== Siegersong (eigene MP3, nur lokal im Browser gespeichert) ===================== */
@@ -684,33 +805,75 @@ const SongStore = {
   del(k) { return this.run('readwrite', s => s.delete(k)); }
 };
 
-// Eigene Quizmusik (MP3, nur lokal gespeichert): läuft in Schleife und macht bei der nächsten Frage
-// dort weiter, wo sie bei der letzten aufgehört hat – so kommt nicht jedes Mal derselbe Anfang.
-const OwnMusic = {
-  audio: null, url: null, ready: false,
-  async load() {
-    this.unload();
-    let rec = null;
-    try { rec = await SongStore.get('quizmusic'); } catch (e) { /* kein IndexedDB */ }
-    if (!rec || !rec.blob) return false;
-    this.url = URL.createObjectURL(rec.blob);
-    const a = new Audio(this.url);
-    a.loop = true;
-    a.volume = 0.7;
-    a.preload = 'auto';
-    a.addEventListener('error', () => { if (this.audio === a) { this.unload(); toast('Quizmusik lässt sich nicht abspielen – es laufen die eingebauten Songs.', 6000); } });
-    this.audio = a;
-    this.ready = true;
-    return true;
-  },
-  unload() {
-    if (this.audio) { this.audio.pause(); this.audio = null; }
-    if (this.url) { URL.revokeObjectURL(this.url); this.url = null; }
-    this.ready = false;
-  },
-  play() { if (this.audio) this.audio.play().catch(() => {}); },
-  pause() { if (this.audio) this.audio.pause(); }
-};
+// Eigene Musik (MP3, nur lokal gespeichert): läuft in Schleife und macht beim nächsten Einsatz
+// dort weiter, wo sie aufgehört hat – so kommt nicht jedes Mal derselbe Anfang.
+function makeOwnMusic(key, label, loop = true) {
+  return {
+    key, label, audio: null, url: null, ready: false,
+    // ab Sekunde sec abspielen; Promise → true, sobald der Ton wirklich läuft (für die Synchronisierung der Animation)
+    playFrom(sec, onEnd) {
+      const a = this.audio;
+      if (!a) return Promise.resolve(false);
+      const my = this.tok = (this.tok || 0) + 1;   // pause()/neuer Aufruf macht einen wartenden Start ungültig
+      return new Promise(res => {
+        let done = false;
+        const finish = v => { if (done) return; done = true; clearTimeout(t); a.removeEventListener('loadedmetadata', go); res(v); };
+        const go = () => {
+          if (done || this.audio !== a || this.tok !== my) return finish(false);
+          try { a.currentTime = Math.max(0, Math.min(sec || 0, (a.duration || 1e9) - 1)); } catch (e) { /* egal */ }
+          a.addEventListener('playing', () => finish(true), { once: true });
+          a.play().catch(() => finish(false));
+        };
+        if (onEnd) a.addEventListener('ended', () => onEnd(true), { once: true });
+        const t = setTimeout(() => { if (this.tok === my) a.pause(); finish(false); }, 4000);   // Datei hängt → nicht ewig warten
+        if (a.readyState >= 1) go(); else a.addEventListener('loadedmetadata', go, { once: true });
+      });
+    },
+    async load() {
+      this.unload();
+      let rec = null;
+      try { rec = await SongStore.get(key); } catch (e) { /* kein IndexedDB */ }
+      if (!rec || !rec.blob) return false;
+      this.url = URL.createObjectURL(rec.blob);
+      const a = new Audio(this.url);
+      // Schleife selbst gebaut: am Ende zurück an „Start bei“ (loopStart), nicht an den Dateianfang
+      a.volume = loop ? 0.7 : 1;
+      a.preload = 'auto';
+      if (loop) a.addEventListener('ended', () => { if (this.audio === a && this.active) { a.currentTime = this.loopStart || 0; a.play().catch(() => {}); } });
+      this.fresh = true;
+      a.addEventListener('error', () => { if (this.audio === a) { this.unload(); toast(`${label} lässt sich nicht abspielen – es laufen die eingebauten Songs.`, 6000); } });
+      this.audio = a;
+      this.ready = true;
+      return true;
+    },
+    unload() {
+      if (this.audio) { this.audio.pause(); this.audio = null; }
+      if (this.url) { URL.revokeObjectURL(this.url); this.url = null; }
+      this.ready = false;
+    },
+    loopStart: 0,
+    // erstes Abspielen nach dem Laden beginnt bei loopStart, danach geht es dort weiter, wo pausiert wurde
+    play() {
+      const a = this.audio;
+      if (!a) return;
+      this.active = true;
+      if (this.fresh) {
+        this.fresh = false;
+        const seek = () => { try { a.currentTime = Math.min(this.loopStart || 0, Math.max(0, (a.duration || 1e9) - 1)); } catch (e) { /* egal */ } };
+        if (a.readyState >= 1) seek(); else a.addEventListener('loadedmetadata', seek, { once: true });
+      }
+      a.play().catch(() => {});
+    },
+    restart() { if (!this.audio) return; this.fresh = true; this.play(); },   // von „Start bei“ neu beginnen
+    pause() { this.tok = (this.tok || 0) + 1; this.active = false; if (this.audio) this.audio.pause(); }
+  };
+}
+// Zwischenmusik: Warteraum, Frage vorlesen, Auflösung, Zwischenstand (z. B. „Powerball“)
+const OwnMusic = makeOwnMusic('quizmusic', 'Die Zwischenmusik');
+// Countdown-Musik: nur solange die Zeit läuft
+const CountMusic = makeOwnMusic('countdownmusic', 'Die Countdown-Musik');
+// Intro-Sound: einmal beim Show-Intro (nicht in Schleife)
+const IntroMusic = makeOwnMusic('introsound', 'Der Intro-Sound', false);
 
 // play() → true (läuft), false (kein Song gespeichert), null (inzwischen gestoppt).
 // onEnd(false) = Song ließ sich nicht abspielen, onEnd(true) = zu Ende gelaufen.
@@ -790,11 +953,12 @@ const Host = {
   editor() {
     this.state = null;
     this.clearLater();
-    Sound.stopMusic();
+    Sound.silence();
     Winner.stop();
+    [OwnMusic, CountMusic, IntroMusic].forEach(m => m.unload());
     document.body.dataset.mood = '';
-    const settings = Object.assign({ time: 20, mode: 'schnell', board: true, shuffle: true, sound: true, phoneText: false, namegen: false, winnerStart: 240 },
-      store.get('quiz-host-settings') || {});
+    const settings = Object.assign({ time: 20, mode: 'schnell', board: true, shuffle: true, sound: true, phoneText: false, namegen: false,
+      winnerStart: 240, showIntro: true, showTitle: '', introStart: 0, introHit: 3, betweenStart: 0, countStart: 0 }, store.get('quiz-host-settings') || {});
     const saveSettings = () => store.set('quiz-host-settings', settings);
     const saved = store.get('quiz-host-text');
     // Die Fragen werden weiter als Text gespeichert (Datei laden/speichern bleibt möglich),
@@ -842,12 +1006,7 @@ const Host = {
       if (textMode) text = ta.value;
       const r = check();
       if (startBtn.disabled) return toast('Bitte erst die markierten Probleme beheben.');
-      Sound.stopMusic();   // Vorschau aus „Musik anhören“ beenden
-      Winner.stop();
-      stopOwnTest();
-      pi = -1;
-      musicBtn.textContent = 'Musik anhören ▶';
-      testBtn.textContent = 'Probehören';
+      stopPreviews();
       Sound.init();
       Sound.on = settings.sound;
       this.start(r, settings);
@@ -861,16 +1020,33 @@ const Host = {
     };
     const checkbox = (key, label) => h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: !!settings[key], onchange: e => { settings[key] = e.target.checked; saveSettings(); } }), label);
+    const timeInput = (key, label) => {
+      const inp = h('input', { class: 'kq-inp mmss', maxlength: '5', 'aria-label': label });
+      inp.value = fmtMMSS(settings[key]);
+      inp.addEventListener('change', () => {
+        const s = parseMMSS(inp.value);
+        if (s == null) { inp.value = fmtMMSS(settings[key]); return toast('Bitte als Minute:Sekunde eingeben, z. B. 0:07'); }
+        settings[key] = s;
+        saveSettings();
+        inp.value = fmtMMSS(s);
+      });
+      return inp;
+    };
+
+    // Vorschauen: es läuft immer nur eine gleichzeitig
+    const previews = [];
+    const stopPreviews = except => previews.forEach(f => { if (f !== except) f(); });
 
     const songList = [...Sound.SONGS.question.map((s, i) => ['question', i, s.name]), ...Sound.SONGS.lobby.map((s, i) => ['lobby', i, s.name])];
     let pi = -1;
-    const musicBtn = h('button', { class: 'btn small', type: 'button' }, 'Musik anhören ▶');
+    const musicBtn = h('button', { class: 'btn small', type: 'button' }, 'Eingebaute Songs anhören ▶');
+    const stopSongPreview = () => { if (pi >= 0) Sound.stopMusic(); pi = -1; musicBtn.textContent = 'Eingebaute Songs anhören ▶'; };
+    previews.push(stopSongPreview);
     musicBtn.addEventListener('click', () => {
       Sound.init();
-      Winner.stop();
-      testBtn.textContent = 'Probehören';
+      stopPreviews(stopSongPreview);
       pi++;
-      if (pi >= songList.length) { pi = -1; Sound.stopMusic(); musicBtn.textContent = 'Musik anhören ▶'; return; }
+      if (pi >= songList.length) return stopSongPreview();
       const [kind, idx, name] = songList[pi];
       const wasOn = Sound.on;
       Sound.on = true;
@@ -879,88 +1055,72 @@ const Host = {
       musicBtn.textContent = `♪ ${kind === 'lobby' ? 'Warteraum' : 'Frage'}: ${name} – weiter ▶`;
     });
 
-    // Siegersong: eigene MP3, bleibt nur im Browser dieses Laptops (IndexedDB) – wird nie hochgeladen
-    const songName = h('span', { class: 'song-name' }, 'Kein Song gewählt – es kommt eine Fanfare');
-    SongStore.get('winner').then(rec => { if (rec) songName.textContent = rec.name; }).catch(() => {});
-    const songIn = h('input', { type: 'file', accept: 'audio/*,.mp3', style: 'display:none' });
-    songIn.addEventListener('change', async () => {
-      const f = songIn.files[0];
-      songIn.value = '';
-      if (!f) return;
-      try {
-        await SongStore.set('winner', { name: f.name, blob: f });
-        songName.textContent = f.name;
-        toast('Siegersong gespeichert – nur auf diesem Laptop');
-      } catch (e) { toast('Speichern fehlgeschlagen: ' + e.message, 6000); }
-    });
-    const startIn = h('input', { class: 'kq-inp mmss', maxlength: '5', 'aria-label': 'Start bei (mm:ss)' });
-    startIn.value = fmtMMSS(settings.winnerStart);
-    startIn.addEventListener('change', () => {
-      const s = parseMMSS(startIn.value);
-      if (s == null) { startIn.value = fmtMMSS(settings.winnerStart); return toast('Bitte als mm:ss eingeben, z. B. 4:00'); }
-      settings.winnerStart = s;
-      saveSettings();
-      startIn.value = fmtMMSS(s);
-    });
-    const testBtn = h('button', { class: 'btn small', type: 'button' }, 'Probehören');
-    testBtn.addEventListener('click', async () => {
-      Sound.stopMusic();
-      pi = -1;
-      musicBtn.textContent = 'Musik anhören ▶';
-      if (Winner.audio) { Winner.stop(); testBtn.textContent = 'Probehören'; return; }
-      testBtn.textContent = 'Stopp';
-      const ok = await Winner.play(settings.winnerStart, done => {
-        testBtn.textContent = 'Probehören';
-        if (done === false) toast('Die Datei lässt sich nicht abspielen – bitte eine andere MP3 wählen.', 6000);
+    // Eigene MP3-Plätze – alle nur im Browser dieses Laptops gespeichert (IndexedDB), nie hochgeladen
+    const mp3Slot = ({ key, title, hint, empty, preview, extra = [] }) => {
+      const name = h('span', { class: 'song-name' }, empty);
+      SongStore.get(key).then(rec => { if (rec) name.textContent = rec.name; }).catch(() => {});
+      const pick = h('input', { type: 'file', accept: 'audio/*,.mp3', style: 'display:none' });
+      const test = h('button', { class: 'btn small', type: 'button' }, 'Probehören');
+      let playing = false;
+      const stop = () => { if (playing) preview.stop(); playing = false; test.textContent = 'Probehören'; };
+      previews.push(stop);
+      pick.addEventListener('change', async () => {
+        const f = pick.files[0];
+        pick.value = '';
+        if (!f) return;
+        stopPreviews();
+        try {
+          await SongStore.set(key, { name: f.name, blob: f });
+          name.textContent = f.name;
+          toast(`„${f.name}“ gespeichert – nur auf diesem Laptop`);
+        } catch (e) { toast('Speichern fehlgeschlagen: ' + e.message, 6000); }
       });
-      if (ok === false) { testBtn.textContent = 'Probehören'; toast('Erst eine MP3 wählen'); }
-    });
-    const rmBtn = h('button', { class: 'btn small', type: 'button' }, 'Entfernen');
-    rmBtn.addEventListener('click', async () => {
-      Winner.stop();
-      testBtn.textContent = 'Probehören';
-      try { await SongStore.del('winner'); } catch (e) { /* egal */ }
-      songName.textContent = 'Kein Song gewählt – es kommt eine Fanfare';
-    });
+      test.addEventListener('click', async () => {
+        if (playing) return stop();
+        Sound.init();
+        stopPreviews();
+        playing = true;
+        test.textContent = 'Stopp';
+        const ok = await preview.start(done => {
+          stop();
+          if (done === false) toast('Die Datei lässt sich nicht abspielen – bitte eine andere MP3 wählen.', 6000);
+        });
+        if (ok === false) { stop(); toast('Erst eine MP3 wählen'); }
+      });
+      const rm = h('button', { class: 'btn small', type: 'button' }, 'Entfernen');
+      rm.addEventListener('click', async () => {
+        stop();
+        try { await SongStore.del(key); } catch (e) { /* egal */ }
+        name.textContent = empty;
+      });
+      return h('div', { class: 'song-box' },
+        h('b', null, title),
+        h('div', { class: 'hint-dark' }, hint),
+        h('div', { class: 'row-btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => pick.click() }, 'MP3 wählen'), name),
+        extra,
+        h('div', { class: 'row-btns' }, test, rm),
+        pick);
+    };
+    // tok: ein Stopp während des Ladens verhindert, dass die Vorschau danach doch noch losspielt
+    const loopPreview = (player, startKey) => {
+      let tok = 0;
+      return {
+        start: async () => {
+          const my = ++tok;
+          if (!(await player.load())) return false;
+          if (my !== tok) { player.unload(); return null; }
+          player.loopStart = settings[startKey] || 0;
+          player.play();
+          return true;
+        },
+        stop: () => { tok++; player.unload(); }
+      };
+    };
+    let introTok = 0;
 
-    // Eigene Quizmusik für die Fragen (z. B. „Powerball“) – ebenfalls nur lokal gespeichert
-    const NO_OWN = 'Keine gewählt – es laufen die eingebauten Songs';
-    const ownName = h('span', { class: 'song-name' }, NO_OWN);
-    SongStore.get('quizmusic').then(rec => { if (rec) ownName.textContent = rec.name; }).catch(() => {});
-    const ownIn = h('input', { type: 'file', accept: 'audio/*,.mp3', style: 'display:none' });
-    const ownTest = h('button', { class: 'btn small', type: 'button' }, 'Probehören');
-    const stopOwnTest = () => { OwnMusic.unload(); ownTest.textContent = 'Probehören'; };
-    ownIn.addEventListener('change', async () => {
-      const f = ownIn.files[0];
-      ownIn.value = '';
-      if (!f) return;
-      try {
-        stopOwnTest();
-        await SongStore.set('quizmusic', { name: f.name, blob: f });
-        ownName.textContent = f.name;
-        toast('Quizmusik gespeichert – nur auf diesem Laptop');
-      } catch (e) { toast('Speichern fehlgeschlagen: ' + e.message, 6000); }
-    });
-    ownTest.addEventListener('click', async () => {
-      if (OwnMusic.audio && !OwnMusic.audio.paused) return stopOwnTest();
-      Sound.stopMusic();
-      Winner.stop();
-      pi = -1;
-      musicBtn.textContent = 'Musik anhören ▶';
-      testBtn.textContent = 'Probehören';
-      if (!(await OwnMusic.load())) return toast('Erst eine MP3 wählen');
-      OwnMusic.play();
-      ownTest.textContent = 'Stopp';
-    });
-    const ownRm = h('button', { class: 'btn small', type: 'button' }, 'Entfernen');
-    ownRm.addEventListener('click', async () => {
-      stopOwnTest();
-      try { await SongStore.del('quizmusic'); } catch (e) { /* egal */ }
-      ownName.textContent = NO_OWN;
-    });
-    // andere Vorschauen beenden die Quizmusik-Vorschau
-    musicBtn.addEventListener('click', stopOwnTest);
-    testBtn.addEventListener('click', stopOwnTest);
+    const titleIn = h('input', { class: 'kq-inp', maxlength: '60', placeholder: SHOW_TITLE, 'aria-label': 'Name der Show' });
+    titleIn.value = settings.showTitle || '';
+    titleIn.addEventListener('input', () => { settings.showTitle = titleIn.value.trim(); saveSettings(); });
 
     const settingsCard = h('div', { class: 'card settings' },
       h('h2', null, 'Spiel-Einstellungen'),
@@ -971,22 +1131,45 @@ const Host = {
       checkbox('shuffle', 'Antworten zufällig mischen (außer Wahr/Falsch)'),
       checkbox('phoneText', 'Fragen und Antworten auch auf den Handys zeigen (aus = nur Farben und Formen, wie Kahoot)'),
       checkbox('namegen', 'Namensgenerator: Handys bekommen zufällige Spitznamen'),
+      h('h2', null, 'Show und Musik'),
+      checkbox('showIntro', 'Show-Intro nach „Start“ (Lichtshow mit Logo, dann erst die erste Frage)'),
+      h('label', null, 'Name der Show', titleIn),
       checkbox('sound', 'Musik und Töne'),
       musicBtn,
-      h('div', { class: 'song-box' },
-        h('b', null, 'Quizmusik während der Fragen'),
-        h('div', { class: 'hint-dark' }, 'Eigene MP3 statt der eingebauten Songs. Läuft in Schleife und macht bei jeder Frage dort weiter, wo sie aufgehört hat. Bleibt nur auf diesem Laptop.'),
-        h('div', { class: 'row-btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => ownIn.click() }, 'MP3 wählen'), ownName),
-        checkbox('ownLobby', 'Auch im Warteraum spielen'),
-        h('div', { class: 'row-btns' }, ownTest, ownRm),
-        ownIn),
-      h('div', { class: 'song-box' },
-        h('b', null, 'Siegersong bei der Siegerehrung'),
-        h('div', { class: 'hint-dark' }, 'Eigene MP3, bleibt nur auf diesem Laptop und wird nicht hochgeladen.'),
-        h('div', { class: 'row-btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => songIn.click() }, 'MP3 wählen'), songName),
-        h('label', { class: 'inline' }, 'Start bei ', startIn, ' (Minute:Sekunde)'),
-        h('div', { class: 'row-btns' }, testBtn, rmBtn),
-        songIn));
+      mp3Slot({
+        key: 'introsound', title: 'Intro-Sound (Show-Start)', empty: 'Keiner gewählt – es kommt der eingebaute Intro-Sound',
+        hint: 'Läuft einmal beim Show-Intro. „Knall bei“ = die Stelle im Sound, an der das Logo erscheinen soll.',
+        preview: {
+          start: async done => {
+            const my = ++introTok;
+            if (!(await IntroMusic.load())) return false;
+            if (my !== introTok) { IntroMusic.unload(); return null; }
+            IntroMusic.playFrom(settings.introStart, done).then(ok => { if (!ok && IntroMusic.audio) done(false); });
+            return true;
+          },
+          stop: () => { introTok++; IntroMusic.unload(); }
+        },
+        extra: [h('label', { class: 'inline' }, 'Start bei ', timeInput('introStart', 'Intro Start bei'), ' · Knall bei ', timeInput('introHit', 'Knall bei'))]
+      }),
+      mp3Slot({
+        key: 'quizmusic', title: 'Musik im Warteraum und bei den Ergebnissen', empty: 'Keine gewählt – im Warteraum läuft ein eingebauter Song',
+        hint: 'Warteraum, Auflösung, Zwischenstand. Läuft in Schleife und macht immer dort weiter, wo sie aufgehört hat.',
+        preview: loopPreview(OwnMusic, 'betweenStart'),
+        extra: [h('label', { class: 'inline' }, 'Start bei ', timeInput('betweenStart', 'Ergebnis-Musik Start bei'), ' (Minute:Sekunde)')]
+      }),
+      mp3Slot({
+        key: 'countdownmusic', title: 'Musik zu jeder Frage', empty: 'Keine gewählt – es laufen die eingebauten Fragen-Songs',
+        hint: 'Startet, sobald die nächste Frage erscheint (zum Vorlesen), läuft weiter, während die Zeit läuft, und endet mit der Auflösung. Beginnt bei jeder Frage von vorn.',
+        preview: loopPreview(CountMusic, 'countStart'),
+        extra: [h('label', { class: 'inline' }, 'Start bei ', timeInput('countStart', 'Frage-Musik Start bei'), ' (Minute:Sekunde)')]
+      }),
+      mp3Slot({
+        key: 'winner', title: 'Siegersong bei der Siegerehrung', empty: 'Keiner gewählt – es kommt eine Fanfare',
+        hint: 'Startet in dem Moment, in dem Platz 1 erscheint.',
+        preview: { start: done => Winner.play(settings.winnerStart, done), stop: () => Winner.stop() },
+        extra: [h('label', { class: 'inline' }, 'Start bei ', timeInput('winnerStart', 'Siegersong Start bei'), ' (Minute:Sekunde)')]
+      }),
+      h('div', { class: 'hint-dark' }, 'Alle MP3s bleiben nur in diesem Browser auf diesem Laptop – nie zu GitHub hochladen.'));
 
     /* ----- Kahoot-Editor: Fragenliste links, Frage in der Mitte, Fragen-Einstellungen rechts ----- */
     let sideEl = null, probEl = null;
@@ -1133,7 +1316,7 @@ const Host = {
     if (sess && sess.code) {
       db.get(`rooms/${sess.code}/state`).then(st => {
         if (!st || st.phase === 'end') return;
-        const where = st.phase === 'lobby' ? 'Warteraum' : `Frage ${st.qi + 1} von ${st.total}`;
+        const where = st.phase === 'lobby' ? 'Warteraum' : st.phase === 'show' ? 'Show-Intro' : `Frage ${st.qi + 1} von ${st.total}`;
         resumeBox.replaceChildren(h('div', { class: 'resume' },
           h('span', null, `Laufendes Quiz in Raum ${fmtCode(sess.code)} (${where})`),
           h('button', { class: 'btn primary', onclick: () => this.resume(sess) }, 'Fortsetzen ▶')));
@@ -1242,15 +1425,26 @@ const Host = {
 
   // Eigene Quizmusik laden (falls im Editor gewählt): während der Fragen, auf Wunsch auch im Warteraum
   async loadOwnMusic() {
-    const ok = await OwnMusic.load();
-    Sound.own = { question: ok, lobby: ok && !!this.settings.ownLobby };
+    Sound.silence();
+    await OwnMusic.load();
+    await CountMusic.load();
+    await IntroMusic.load();
+    OwnMusic.loopStart = this.settings.betweenStart || 0;
+    CountMusic.loopStart = this.settings.countStart || 0;
   },
 
-  async resume(sess) {
+  async resume(sess) {   // Doppelklick auf „Fortsetzen“ abfangen
+    if (this.resuming) return;
+    this.resuming = true;
+    try { await this.doResume(sess); } finally { this.resuming = false; }
+  },
+
+  async doResume(sess) {
     let room;
     try { room = await withTimeout(db.get(`rooms/${sess.code}`)); } catch (e) { return toast('Fortsetzen fehlgeschlagen: ' + e.message); }
     if (!room || !room.state) { store.del('quiz-host-session'); toast('Diesen Raum gibt es nicht mehr.'); return this.editor(); }
     Sound.init();
+    Winner.stop();   // evtl. laufende Siegersong-Vorschau aus dem Editor beenden
     this.code = sess.code;
     this.quiz = sess.quiz;
     this.settings = sess.settings;
@@ -1273,7 +1467,7 @@ const Host = {
       this.closing = false;
       this.render();   // kann schon closeQuestion auslösen (Zeit um oder alle haben geantwortet)
       if (this.closing) return;
-      if (serverNow() < st.endsAt) { this.watchAnswers(st.qi); this.startTicker(); Sound.startMusic(); }
+      if (serverNow() < st.endsAt) { this.watchAnswers(st.qi); this.startTicker(); }
       else this.closeQuestion('time');
       return;
     }
@@ -1295,7 +1489,8 @@ const Host = {
       const sess = { code: this.code, quiz: this.quiz, settings: this.settings };
       this.leaveRoom();
       this.clearLater();
-      Sound.stopMusic();
+      Sound.silence();
+      Winner.stop();
       this.state = null;
       view(h('div', { class: 'player' }, h('div', { class: 'center' },
         h('h2', { class: 'big-title' }, 'Dieses Quiz wird gerade in einem anderen Tab geleitet.'),
@@ -1330,14 +1525,17 @@ const Host = {
 
   next() {
     const now = Date.now();
-    if (!this.state || now - this.lastNext < 600) return;   // Doppelklick/Taste + Klick abfangen
+    if (!this.state || !$('#app > .host') || now - this.lastNext < 600) return;   // nur mit Beamer-Ansicht; Doppelklick abfangen
     this.lastNext = now;
     const st = this.state, last = st.qi >= this.total() - 1;
     switch (st.phase) {
       case 'lobby':
         if (!this.count()) return toast('Noch niemand beigetreten.');
         Sound.init();
-        return this.goIntro(0);
+        // Show-Intro (Logo + Intro-Sound) vor der ersten Frage, abschaltbar im Editor
+        return this.settings.showIntro === false ? this.goIntro(0)
+          : this.setState({ phase: 'show', qi: -1, title: this.settings.showTitle || SHOW_TITLE });
+      case 'show': return this.goIntro(0);
       case 'intro': return this.goQuestion();
       case 'question': return this.closeQuestion('manual');
       case 'reveal':
@@ -1355,7 +1553,6 @@ const Host = {
     if (q.image) pub.image = q.image;
     this.unsubAnswers && this.unsubAnswers();
     this.unsubAnswers = null;
-    Sound.stopMusic();
     this.setState({ phase: 'intro', qi, dur }, { question: pub, [`answers/${qi}`]: null, [`results/${qi}`]: null });
     Sound.gong();
     // Standard: Frage steht ohne Zeit, bis der Tutor klickt (Leertaste). Optional automatisch nach 4 s.
@@ -1370,7 +1567,6 @@ const Host = {
     this.setState({ phase: 'question', qi, dur, endsAt: serverNow() + dur * 1000 });
     this.watchAnswers(qi);
     this.startTicker();
-    Sound.startMusic();
   },
 
   watchAnswers(qi) {
@@ -1412,7 +1608,7 @@ const Host = {
     if (!this.state || this.state.phase !== 'question' || this.closing) return;
     this.closing = true;
     clearInterval(this.ticker);
-    Sound.stopMusic();
+    Sound.silence();   // Countdown-Musik aus; mit der Auflösung startet die Zwischenmusik
     const qi = this.state.qi, seq = this.seq;
     const status = $('#qStatus');
     if (status) status.textContent = reason === 'all' ? 'Alle haben geantwortet!' : reason === 'time' ? 'Zeit abgelaufen!' : 'Beendet';
@@ -1500,7 +1696,6 @@ const Host = {
 
   goEnd() {
     const scores = Object.fromEntries(Object.entries(this.players).map(([k, p]) => [k, p.score || 0]));
-    Sound.stopMusic();
     this.setState({ phase: 'end', qi: this.state.qi }, { final: { ranks: rankMap(scores), n: Object.keys(scores).length } });
   },
 
@@ -1510,7 +1705,10 @@ const Host = {
     document.body.dataset.mood = '';
     document.body.dataset.view = 'host';
     const ph = this.state.phase;
+    // Musik passend zur Phase (läuft dieselbe schon, läuft sie einfach weiter)
+    if (!(ph === 'question' && this.closing)) Sound.phaseMusic(ph);
     if (ph === 'lobby') this.renderLobby();
+    else if (ph === 'show') this.renderShow();
     else if (ph === 'intro') this.renderIntro();
     else if (ph === 'question') this.renderQuestion();
     else if (ph === 'reveal') this.renderReveal();
@@ -1525,11 +1723,15 @@ const Host = {
     soundBtn.addEventListener('click', () => {
       Sound.on = !Sound.on;
       this.settings.sound = Sound.on;
-      if (!Sound.on) { Sound.stopMusic(); Winner.stop(); }
+      if (!Sound.on) { Sound.silence(); Winner.stop(); }
       else {
         Sound.init();
-        if (st.phase === 'question' && !this.closing) Sound.startMusic();
-        if (st.phase === 'lobby') Sound.startMusic('lobby');
+        Sound.cur = null;
+        if (!(st.phase === 'question' && this.closing)) Sound.phaseMusic(st.phase);
+        // Show-Intro und Siegerehrung starten ihren Ton selbst – nach „Ton an“ hier nachholen
+        if (st.phase === 'show') Sound.playShow(this.settings.introStart || 0, this.settings.introHit ?? 3, () => {});
+        if (st.phase === 'end') Winner.play(this.settings.winnerStart ?? 240, ok => { if (ok === false && Sound.on) Sound.fanfare(); })
+          .then(ok => { if (ok === false) Sound.fanfare(); });
       }
       soundBtn.replaceChildren(icon(Sound.on ? 'sound' : 'mute'));
       this.saveSession();
@@ -1592,7 +1794,6 @@ const Host = {
     makeQR(qr, joinUrl(this.code));
     this.updateChips(true);
     Winner.stop();
-    if (!Sound.music) Sound.startMusic('lobby');
   },
 
   updateChips(silent) {
@@ -1626,6 +1827,37 @@ const Host = {
     el.classList.add('kick');
     nm.textContent = 'Entfernen?';
     setTimeout(() => { if (el.isConnected) { el.classList.remove('kick'); nm.textContent = old; } }, 2500);
+  },
+
+  // Show-Intro „Millionär-Lichtshow“: dunkle Bühne, Scheinwerfer schwenken; beim Knall richten sie sich
+  // auf die Mitte, Lichtblitz, Strahlenkranz, und das Logo steigt in Gold auf.
+  renderShow() {
+    const title = this.state.title || this.settings.showTitle || SHOW_TITLE;
+    const stage = h('div', { class: 'host show' },
+      h('div', { class: 'spot l' }), h('div', { class: 'spot r' }),
+      h('div', { class: 'show-rays' }),
+      h('div', { class: 'show-floor' }),
+      h('div', { class: 'show-flash' }),
+      h('div', { class: 'show-stage' },
+        h('div', { class: 'show-flare' }),
+        h('div', { class: 'show-logo' },
+          h('div', { class: 'show-title' }, title),
+          h('div', { class: 'show-sub' }, this.quiz.title),
+          h('div', { class: 'show-meta' }, `${this.total()} Fragen · ${this.count()} Mitspielende`))),
+      h('div', { class: 'host-actions' },
+        h('span', { class: 'hint' }, 'Leertaste = erste Frage'),
+        h('button', { class: 'btn big', onclick: () => this.next() }, 'Los geht’s ▶')),
+      this.topbar());
+    view(stage);
+    let started = false;
+    const go = delay => {
+      if (started || !stage.isConnected) return;
+      started = true;
+      stage.style.setProperty('--hit', delay.toFixed(2) + 's');
+      stage.classList.add('go');
+    };
+    Sound.playShow(this.settings.introStart || 0, this.settings.introHit ?? 3, go);
+    this.later(() => go(0.3), 6000);   // Sicherheitsnetz: Logo kommt spätestens nach 6 s
   },
 
   qBar() {
@@ -2077,6 +2309,10 @@ const Player = {
     document.body.dataset.mood = '';
     switch (st.phase) {
       case 'lobby': return this.renderLobby();
+      case 'show': return this.screen('intro',
+        h('div', { class: 'loader' }, [0, 1, 2, 3].map(i => h('span', { class: COLORS[i] }, shapeEl(i)))),
+        h('h2', { class: 'big-title' }, st.title || SHOW_TITLE),
+        h('div', { class: 'sub' }, 'Gleich geht’s los – Augen nach vorne!'));
       case 'intro': return this.renderIntro();
       case 'question': return this.renderQuestion();
       case 'reveal': case 'leaderboard': return this.renderResult();

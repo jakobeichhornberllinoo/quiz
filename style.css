@@ -245,6 +245,55 @@ textarea.editor:focus { outline: 2px solid var(--purple-light); }
 .chip.kick { background: var(--wrong); text-decoration: none; }
 .lobby-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 1vh 2.5vw; font-weight: 600; font-size: clamp(13px, 1vw, 18px); opacity: .9; }
 
+/* Show-Intro „Millionär-Lichtshow“: Scheinwerfer schwenken, beim Knall (--hit, kommt aus dem Intro-Sound)
+   richten sie sich auf die Mitte, Blitz, Strahlenkranz, goldenes Logo steigt auf. Alles erst mit .go. */
+.host.show { position: relative; overflow: hidden; background: radial-gradient(ellipse at 50% 110%, #3b1d8f 0%, #170a45 45%, #06021a 100%); --hit: 3s; }
+.spot {
+  position: absolute; top: -12vh; width: 42vw; height: 135vh; transform-origin: 50% 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(220, 230, 255, .42) 0%, rgba(160, 180, 255, .12) 55%, rgba(255, 255, 255, 0) 90%);
+  clip-path: polygon(46% 0, 54% 0, 100% 100%, 0 100%); filter: blur(5px); mix-blend-mode: screen;
+}
+.spot.l { left: -6vw; animation: sweep-l 2.6s ease-in-out infinite alternate; }
+.spot.r { right: -6vw; animation: sweep-r 3.1s ease-in-out infinite alternate; }
+@keyframes sweep-l { from { transform: rotate(-38deg); } to { transform: rotate(22deg); } }
+@keyframes sweep-r { from { transform: rotate(38deg); } to { transform: rotate(-22deg); } }
+@keyframes aim-l { to { transform: rotate(-24deg); opacity: .9; } }
+@keyframes aim-r { to { transform: rotate(24deg); opacity: .9; } }
+.show.go .spot.l { animation: sweep-l 2.6s ease-in-out infinite alternate, aim-l .5s var(--hit) ease-out forwards; }
+.show.go .spot.r { animation: sweep-r 3.1s ease-in-out infinite alternate, aim-r .5s var(--hit) ease-out forwards; }
+.show-rays {
+  position: absolute; left: 50%; top: 46%; width: 220vmax; height: 220vmax; margin: -110vmax 0 0 -110vmax; opacity: 0; pointer-events: none;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 214, 102, .13) 0deg 5deg, transparent 5deg 15deg);
+  -webkit-mask: radial-gradient(circle, #000 0%, transparent 45%); mask: radial-gradient(circle, #000 0%, transparent 45%);
+}
+.show.go .show-rays { animation: show-in .9s var(--hit) forwards, spin 50s linear infinite; }
+.show-floor { position: absolute; left: 10%; right: 10%; bottom: -18vh; height: 40vh; border-radius: 50%; background: radial-gradient(ellipse, rgba(140, 110, 255, .45), transparent 70%); pointer-events: none; }
+.show.go .show-floor { animation: floor-glow 2s var(--hit) ease-in-out infinite; }
+@keyframes floor-glow { 50% { opacity: .55; } }
+.show-flash { position: absolute; inset: 0; background: radial-gradient(circle at 50% 46%, #fff 0%, rgba(255, 240, 200, .8) 30%, rgba(255, 255, 255, 0) 70%); opacity: 0; pointer-events: none; }
+.show.go .show-flash { animation: show-flash .9s var(--hit) ease-out; }
+.show-stage { flex: 1; position: relative; display: grid; place-items: center; }
+.show-flare { position: absolute; width: 60vmin; height: 60vmin; border-radius: 50%; background: radial-gradient(circle, rgba(255, 230, 150, .55), transparent 65%); opacity: 0; transform: scale(.2); }
+.show.go .show-flare { animation: flare 1.4s var(--hit) ease-out forwards; }
+@keyframes flare { 30% { opacity: 1; transform: scale(1.3); } 100% { opacity: .45; transform: scale(1); } }
+.show-logo { position: relative; text-align: center; opacity: 0; }
+.show.go .show-logo { animation: logo-rise 1.1s var(--hit) cubic-bezier(.15, 1.25, .35, 1) forwards; }
+@keyframes logo-rise { 0% { opacity: 0; transform: translateY(18vh) scale(.55); filter: blur(10px); } 55% { opacity: 1; filter: blur(0); } 100% { opacity: 1; transform: none; } }
+.show-title {
+  font-size: clamp(36px, 6.2vw, 118px); font-weight: 900; line-height: 1.05; padding: .1em .3em;
+  background: linear-gradient(110deg, #c98700 0%, #ffd34d 30%, #fffbe6 48%, #ffd34d 62%, #c98700 100%); background-size: 250% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 5px 0 rgba(0, 0, 0, .45)) drop-shadow(0 0 28px rgba(255, 200, 80, .5));
+}
+.show.go .show-title { animation: shimmer 3.2s calc(var(--hit) + 1s) linear infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+.show-sub { margin-top: 1.5vh; font-size: clamp(16px, 1.9vw, 34px); font-weight: 800; }
+.show-meta { margin-top: 1vh; font-size: clamp(14px, 1.4vw, 24px); font-weight: 700; opacity: .8; }
+@keyframes show-flash { 0% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes show-in { to { opacity: 1; } }
+.host.show .host-actions, .host.show .footbar { position: relative; z-index: 2; }
+@media (max-width: 900px), (max-aspect-ratio: 1/1) { .host.show { overflow: hidden; height: 100vh; } }
+
 /* Frage wird angezeigt (Intro) */
 .intro-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; padding: 0 4vw; text-align: center; }
 .intro-num { display: flex; gap: .6em; align-items: center; font-weight: 800; font-size: clamp(18px, 2vw, 36px); }
