@@ -377,10 +377,12 @@ const Sound = {
     if (song.snare.includes(s)) this.drum('snare', t);
     if (song.hat.includes(s)) this.drum('hat', t);
   },
+  own: { question: false, lobby: false },   // eigene MP3 statt der eingebauten Songs (setzt der Host)
   startPreview(kind, idx) { this.startMusic(kind, idx); },
   startMusic(kind = 'question', fixed) {
     this.stopMusic();
     if (!this.on || !this.ctx) return;
+    if (!Number.isInteger(fixed) && this.own[kind] && OwnMusic.ready) { OwnMusic.play(); this.music = 'own'; return; }
     // zufälliger Song, aber nie zweimal derselbe hintereinander
     const list = this.SONGS[kind] || this.SONGS.question;
     let pick = Number.isInteger(fixed) ? fixed : Math.floor(Math.random() * list.length);
@@ -399,7 +401,7 @@ const Sound = {
     }, 25);
   },
   stopMusic() {
-    clearInterval(this.music);
+    if (this.music === 'own') OwnMusic.pause(); else clearInterval(this.music);
     this.music = null;
     if (this.bus && this.ctx) {
       const bus = this.bus;
@@ -682,6 +684,34 @@ const SongStore = {
   del(k) { return this.run('readwrite', s => s.delete(k)); }
 };
 
+// Eigene Quizmusik (MP3, nur lokal gespeichert): läuft in Schleife und macht bei der nächsten Frage
+// dort weiter, wo sie bei der letzten aufgehört hat – so kommt nicht jedes Mal derselbe Anfang.
+const OwnMusic = {
+  audio: null, url: null, ready: false,
+  async load() {
+    this.unload();
+    let rec = null;
+    try { rec = await SongStore.get('quizmusic'); } catch (e) { /* kein IndexedDB */ }
+    if (!rec || !rec.blob) return false;
+    this.url = URL.createObjectURL(rec.blob);
+    const a = new Audio(this.url);
+    a.loop = true;
+    a.volume = 0.7;
+    a.preload = 'auto';
+    a.addEventListener('error', () => { if (this.audio === a) { this.unload(); toast('Quizmusik lässt sich nicht abspielen – es laufen die eingebauten Songs.', 6000); } });
+    this.audio = a;
+    this.ready = true;
+    return true;
+  },
+  unload() {
+    if (this.audio) { this.audio.pause(); this.audio = null; }
+    if (this.url) { URL.revokeObjectURL(this.url); this.url = null; }
+    this.ready = false;
+  },
+  play() { if (this.audio) this.audio.play().catch(() => {}); },
+  pause() { if (this.audio) this.audio.pause(); }
+};
+
 // play() → true (läuft), false (kein Song gespeichert), null (inzwischen gestoppt).
 // onEnd(false) = Song ließ sich nicht abspielen, onEnd(true) = zu Ende gelaufen.
 const Winner = {
@@ -814,6 +844,7 @@ const Host = {
       if (startBtn.disabled) return toast('Bitte erst die markierten Probleme beheben.');
       Sound.stopMusic();   // Vorschau aus „Musik anhören“ beenden
       Winner.stop();
+      stopOwnTest();
       pi = -1;
       musicBtn.textContent = 'Musik anhören ▶';
       testBtn.textContent = 'Probehören';
@@ -892,6 +923,45 @@ const Host = {
       songName.textContent = 'Kein Song gewählt – es kommt eine Fanfare';
     });
 
+    // Eigene Quizmusik für die Fragen (z. B. „Powerball“) – ebenfalls nur lokal gespeichert
+    const NO_OWN = 'Keine gewählt – es laufen die eingebauten Songs';
+    const ownName = h('span', { class: 'song-name' }, NO_OWN);
+    SongStore.get('quizmusic').then(rec => { if (rec) ownName.textContent = rec.name; }).catch(() => {});
+    const ownIn = h('input', { type: 'file', accept: 'audio/*,.mp3', style: 'display:none' });
+    const ownTest = h('button', { class: 'btn small', type: 'button' }, 'Probehören');
+    const stopOwnTest = () => { OwnMusic.unload(); ownTest.textContent = 'Probehören'; };
+    ownIn.addEventListener('change', async () => {
+      const f = ownIn.files[0];
+      ownIn.value = '';
+      if (!f) return;
+      try {
+        stopOwnTest();
+        await SongStore.set('quizmusic', { name: f.name, blob: f });
+        ownName.textContent = f.name;
+        toast('Quizmusik gespeichert – nur auf diesem Laptop');
+      } catch (e) { toast('Speichern fehlgeschlagen: ' + e.message, 6000); }
+    });
+    ownTest.addEventListener('click', async () => {
+      if (OwnMusic.audio && !OwnMusic.audio.paused) return stopOwnTest();
+      Sound.stopMusic();
+      Winner.stop();
+      pi = -1;
+      musicBtn.textContent = 'Musik anhören ▶';
+      testBtn.textContent = 'Probehören';
+      if (!(await OwnMusic.load())) return toast('Erst eine MP3 wählen');
+      OwnMusic.play();
+      ownTest.textContent = 'Stopp';
+    });
+    const ownRm = h('button', { class: 'btn small', type: 'button' }, 'Entfernen');
+    ownRm.addEventListener('click', async () => {
+      stopOwnTest();
+      try { await SongStore.del('quizmusic'); } catch (e) { /* egal */ }
+      ownName.textContent = NO_OWN;
+    });
+    // andere Vorschauen beenden die Quizmusik-Vorschau
+    musicBtn.addEventListener('click', stopOwnTest);
+    testBtn.addEventListener('click', stopOwnTest);
+
     const settingsCard = h('div', { class: 'card settings' },
       h('h2', null, 'Spiel-Einstellungen'),
       h('label', null, 'Zeit pro Frage (Standard)', select('time', [5, 10, 15, 20, 30, 45, 60, 90, 120, 240].map(s => [s, s + ' Sekunden']))),
@@ -903,6 +973,13 @@ const Host = {
       checkbox('namegen', 'Namensgenerator: Handys bekommen zufällige Spitznamen'),
       checkbox('sound', 'Musik und Töne'),
       musicBtn,
+      h('div', { class: 'song-box' },
+        h('b', null, 'Quizmusik während der Fragen'),
+        h('div', { class: 'hint-dark' }, 'Eigene MP3 statt der eingebauten Songs. Läuft in Schleife und macht bei jeder Frage dort weiter, wo sie aufgehört hat. Bleibt nur auf diesem Laptop.'),
+        h('div', { class: 'row-btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => ownIn.click() }, 'MP3 wählen'), ownName),
+        checkbox('ownLobby', 'Auch im Warteraum spielen'),
+        h('div', { class: 'row-btns' }, ownTest, ownRm),
+        ownIn),
       h('div', { class: 'song-box' },
         h('b', null, 'Siegersong bei der Siegerehrung'),
         h('div', { class: 'hint-dark' }, 'Eigene MP3, bleibt nur auf diesem Laptop und wird nicht hochgeladen.'),
@@ -1157,9 +1234,16 @@ const Host = {
     this.results = {};
     this.locked = false;
     this.saveSession();
+    await this.loadOwnMusic();
     this.subscribe();
     this.render();
     keepAwake();
+  },
+
+  // Eigene Quizmusik laden (falls im Editor gewählt): während der Fragen, auf Wunsch auch im Warteraum
+  async loadOwnMusic() {
+    const ok = await OwnMusic.load();
+    Sound.own = { question: ok, lobby: ok && !!this.settings.ownLobby };
   },
 
   async resume(sess) {
@@ -1171,6 +1255,7 @@ const Host = {
     this.quiz = sess.quiz;
     this.settings = sess.settings;
     Sound.on = !!this.settings.sound;
+    await this.loadOwnMusic();
     this.players = cleanPlayers(room.players);
     this.locked = !!room.locked;
     this.results = {};
