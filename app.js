@@ -262,7 +262,7 @@ async function makeQR(el, text) {
 /* ===================== Ton (WebAudio, keine Dateien) ===================== */
 
 const Sound = {
-  ctx: null, on: true, music: null,
+  ctx: null, on: true, music: null, lastSong: {},
   init() {
     if (!this.ctx) { try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { /* kein Ton */ } }
     if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
@@ -285,21 +285,129 @@ const Sound = {
   gong() { this.tone(196, 0.8, 'sine', 0.25); this.tone(392, 0.6, 'sine', 0.1); },
   reveal() { [523, 659, 784].forEach((f, i) => this.tone(f, 0.25, 'triangle', 0.15, i * 0.09)); },
   fanfare() { [523, 659, 784, 1047, 784, 1047].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.16, i * 0.14)); },
-  // Frage: treibender Loop; Warteraum ('lobby'): ruhigerer Loop wie Kahoots Lobby-Musik
-  startMusic(kind = 'question') {
+  // ---- Musik: eigene kleine Songs (Bass, Melodie, Akkord-Tupfer, Schlagzeug), live im Browser erzeugt ----
+  // Alle selbst komponiert (keine fremden Melodien). Jede Frage bekommt zufällig einen anderen Song.
+  // Melodie-Ziffern zeigen auf Akkordtöne: 0–2(3) = Akkord, danach dieselben Töne eine Oktave höher.
+  SONGS: {
+    question: [
+      { name: 'Hüpfball', bpm: 140,   // C–G–Am–F
+        chords: [[48, [72, 76, 79]], [43, [71, 74, 79]], [45, [72, 76, 81]], [41, [72, 77, 81]]],
+        bass: [0, 3, 4, 6], lead: 'square', leadVol: 0.026, stab: [2, 6],
+        melodies: [[0, 2, 3, 2, 4, 3, 2, 1], [3, 4, 5, 4, 3, 2, 3, 1]], mask: [1, 1, 1, 0, 1, 1, 0, 1],
+        kick: [0, 4], snare: [2, 6], hat: [1, 3, 5, 7] },
+      { name: 'Sonnenschein', bpm: 132,   // D–A–Bm–G
+        chords: [[50, [74, 78, 81]], [45, [73, 76, 81]], [47, [74, 78, 83]], [43, [74, 79, 83]]],
+        bass: [0, 2, 4, 6], lead: 'triangle', leadVol: 0.05, stab: [1, 3, 5, 7],
+        melodies: [[2, 1, 0, 1, 2, 2, 3, 3], [3, 2, 1, 2, 0, 1, 2, 4]], mask: [1, 1, 1, 1, 1, 0, 1, 0],
+        kick: [0, 3, 4], snare: [2, 6], hat: [0, 1, 2, 3, 4, 5, 6, 7] },
+      { name: 'Galopp', bpm: 150,   // F–Bb–C–F
+        chords: [[41, [77, 81, 84]], [46, [77, 82, 86]], [48, [76, 79, 84]], [41, [77, 81, 84]]],
+        bass: [0, 2, 4, 6], lead: 'square', leadVol: 0.024, stab: [3, 7],
+        melodies: [[0, 0, 2, 0, 3, 0, 2, 1], [3, 2, 3, 4, 3, 2, 1, 0]], mask: [1, 1, 1, 1, 1, 1, 1, 0],
+        kick: [0, 2, 4, 6], snare: [], hat: [1, 3, 5, 7] },
+      { name: 'Spieluhr', bpm: 124,   // G–Em–C–D
+        chords: [[43, [79, 83, 86]], [40, [79, 83, 88]], [48, [79, 84, 88]], [50, [78, 81, 86]]],
+        bass: [0, 4, 6], lead: 'sine', leadVol: 0.07, stab: [2, 6],
+        melodies: [[0, 1, 2, 3, 2, 1, 0, 1], [4, 3, 2, 1, 2, 3, 4, 5]], mask: [1, 0, 1, 1, 1, 0, 1, 1],
+        kick: [0, 4], snare: [6], hat: [2, 6] }
+    ],
+    lobby: [
+      { name: 'Lounge', bpm: 104,   // Fmaj7–Em7–Dm7–Cmaj7
+        chords: [[41, [65, 69, 72, 76]], [40, [64, 67, 71, 74]], [38, [62, 65, 69, 72]], [36, [60, 64, 67, 71]]],
+        bass: [0, 3, 6], lead: 'triangle', leadVol: 0.05, stab: [],
+        melodies: [[3, 2, 1, 2, 0, 1, 2, 3], [1, 2, 3, 2, 1, 0, 1, 2]], mask: [1, 0, 1, 0, 0, 1, 0, 1],
+        kick: [0, 3], snare: [4], hat: [0, 2, 4, 6] },
+      { name: 'Strandbar', bpm: 112,   // C–Am–Dm–G (Bossa-artig)
+        chords: [[48, [64, 67, 72, 76]], [45, [64, 69, 72, 76]], [50, [65, 69, 74, 77]], [43, [62, 67, 71, 74]]],
+        bass: [0, 3, 4, 7], lead: 'triangle', leadVol: 0.05, stab: [2, 5],
+        melodies: [[4, 3, 2, 3, 0, 0, 2, 1], [2, 3, 4, 5, 4, 3, 2, 0]], mask: [1, 0, 1, 1, 0, 1, 0, 0],
+        kick: [0, 3], snare: [], hat: [0, 1, 2, 3, 4, 5, 6, 7] }
+    ]
+  },
+  note(midi, t, dur, type, vol) {
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(440 * Math.pow(2, (midi - 69) / 12), t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(this.bus);
+    o.start(t);
+    o.stop(t + dur + 0.02);
+  },
+  drum(kind, t) {
+    const g = this.ctx.createGain();
+    g.connect(this.bus);
+    if (kind === 'kick') {
+      const o = this.ctx.createOscillator();
+      o.frequency.setValueAtTime(150, t);
+      o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      g.gain.setValueAtTime(0.3, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      o.connect(g);
+      o.start(t);
+      o.stop(t + 0.2);
+      return;
+    }
+    if (!this.noise) {   // weißes Rauschen einmal erzeugen (für Snare und Hi-Hat)
+      this.noise = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.3, this.ctx.sampleRate);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter();
+    s.buffer = this.noise;
+    f.type = 'highpass';
+    f.frequency.value = kind === 'hat' ? 7000 : 1500;
+    const dur = kind === 'hat' ? 0.04 : 0.12;
+    g.gain.setValueAtTime(kind === 'hat' ? 0.035 : 0.1, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    s.connect(f).connect(g);
+    s.start(t);
+    s.stop(t + dur + 0.02);
+  },
+  playStep(song, n, t, step) {
+    const s = n % 8, [root, tones] = song.chords[Math.floor(n / 8) % song.chords.length];
+    const ext = [...tones, ...tones.map(x => x + 12)];   // Akkordtöne + eine Oktave höher
+    if (song.bass.includes(s)) this.note(root + (s === 6 ? 12 : 0), t, step * 0.9, 'triangle', 0.14);
+    const mel = song.melodies[Math.floor(n / 32) % song.melodies.length][s];
+    if (song.mask[s]) this.note(ext[mel % ext.length], t, step * 0.8, song.lead, song.leadVol);
+    // kurze Akkord-Tupfer auf den Nachschlägen – machen den Klang voller und fröhlicher
+    if (song.stab && song.stab.includes(s)) tones.slice(0, 3).forEach(m => this.note(m - 12, t, step * 0.5, 'triangle', 0.018));
+    if (song.kick.includes(s)) this.drum('kick', t);
+    if (song.snare.includes(s)) this.drum('snare', t);
+    if (song.hat.includes(s)) this.drum('hat', t);
+  },
+  startPreview(kind, idx) { this.startMusic(kind, idx); },
+  startMusic(kind = 'question', fixed) {
     this.stopMusic();
     if (!this.on || !this.ctx) return;
-    const lobby = kind === 'lobby';
-    const notes = lobby ? [262, 330, 392, 330, 294, 349, 440, 349] : [220, 277, 330, 277, 247, 311, 370, 311];
-    let i = 0;
+    // zufälliger Song, aber nie zweimal derselbe hintereinander
+    const list = this.SONGS[kind] || this.SONGS.question;
+    let pick = Number.isInteger(fixed) ? fixed : Math.floor(Math.random() * list.length);
+    if (!Number.isInteger(fixed) && list.length > 1 && pick === this.lastSong[kind]) pick = (pick + 1) % list.length;
+    this.lastSong[kind] = pick;
+    const song = list[pick];
+    const step = 60 / song.bpm / 2;   // Achtelnoten
+    this.bus = this.ctx.createGain();
+    this.bus.gain.value = 0.9;
+    this.bus.connect(this.ctx.destination);
+    let n = 0, next = this.ctx.currentTime + 0.05;
+    // Vorausplanen im Audiotakt: läuft gleichmäßig, auch wenn der Bildschirm gerade viel zu tun hat
     this.music = setInterval(() => {
-      const f = notes[i % notes.length];
-      this.tone(f, lobby ? 0.3 : 0.18, 'triangle', lobby ? 0.035 : 0.045);
-      if (i % 2 === 0) this.tone(f / 2, 0.12, 'sine', lobby ? 0.05 : 0.07);
-      i++;
-    }, lobby ? 340 : 230);
+      if (next < this.ctx.currentTime - 0.2) next = this.ctx.currentTime + 0.05;   // nach Pause/Hintergrund nicht alles nachholen
+      while (next < this.ctx.currentTime + 0.15) { this.playStep(song, n, next, step); n++; next += step; }
+    }, 25);
   },
-  stopMusic() { clearInterval(this.music); this.music = null; }
+  stopMusic() {
+    clearInterval(this.music);
+    this.music = null;
+    if (this.bus && this.ctx) {
+      const bus = this.bus;
+      bus.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);   // weich ausblenden statt abhacken
+      setTimeout(() => { try { bus.disconnect(); } catch (e) { /* schon weg */ } }, 400);
+    }
+    this.bus = null;
+  }
 };
 
 /* ===================== Konfetti ===================== */
@@ -483,6 +591,129 @@ function parseQuiz(text) {
   return { title, questions, errors };
 }
 
+/* ===================== Editor-Modell (Kahoot-artiger Editor ↔ Textformat) ===================== */
+
+const KIND_LABEL = { quiz: 'Quiz', tf: 'Wahr oder falsch', text: 'Freitext', poll: 'Umfrage' };
+
+function newQuestion(kind) {
+  const q = { kind, text: '', options: [], answers: [''], time: null, double: false, image: '' };
+  convertQuestion(q, kind);
+  return q;
+}
+
+// Fragetyp wechseln und dabei möglichst viel vom Inhalt behalten
+function convertQuestion(q, kind) {
+  const right = q.options.find(o => o.ok && o.t.trim());
+  if (kind === 'tf') {
+    if (q.kind !== 'tf' && q.options.some(o => o.t.trim())) q.keep = q.options;   // für den Rückwechsel aufheben
+    q.options = [{ t: 'Wahr', ok: true }, { t: 'Falsch', ok: false }];
+  } else if (kind === 'text') {
+    if (!q.answers.some(a => a.trim())) q.answers = [right ? right.t.replace(/\|/g, '/') : ''];
+  } else {
+    if (q.kind === 'tf') { q.options = q.keep || []; delete q.keep; }   // Antworten von vor „Wahr oder falsch“ zurückholen
+    while (q.options.length < 4) q.options.push({ t: '', ok: false });
+    if (kind === 'poll') q.double = false;
+  }
+  q.kind = kind;
+}
+
+function toModel(r) {
+  return {
+    title: r.title || '',
+    qs: r.questions.map(q => {
+      const tf = q.type === 'mc' && !q.poll && q.options.length === 2 && /^wahr$/i.test(q.options[0]) && /^falsch$/i.test(q.options[1]);
+      const kind = q.poll ? 'poll' : q.type === 'text' ? 'text' : tf ? 'tf' : 'quiz';
+      const options = q.options.map((t, i) => ({ t, ok: q.correct.includes(i) }));
+      if (kind === 'quiz' || kind === 'poll') while (options.length < 4) options.push({ t: '', ok: false });
+      return { kind, text: q.text, options, answers: q.answers.length ? q.answers.slice() : [''], time: q.time, double: !!q.double, image: q.image || '' };
+    })
+  };
+}
+
+function fromModel(m) {
+  const one = s => String(s || '').replace(/\s*\n\s*/g, ' ').trim();
+  const out = [];
+  if (one(m.title)) out.push('# ' + one(m.title), '');
+  for (const q of m.qs) {
+    out.push('? ' + one(q.text));
+    if (q.kind === 'text') {
+      const a = q.answers.map(one).filter(Boolean);
+      if (a.length) out.push('= ' + a.join(' | '));
+    } else {
+      q.options.forEach(o => { if (one(o.t)) out.push((q.kind !== 'poll' && o.ok ? '+ ' : '- ') + one(o.t)); });
+    }
+    if (q.time) out.push('Zeit: ' + q.time);
+    if (q.image && /^https?:\/\/\S+$/i.test(q.image.trim())) out.push('Bild: ' + q.image.trim());
+    if (q.double && q.kind !== 'poll') out.push('Punkte: doppelt');
+    if (q.kind === 'poll') out.push('Typ: Umfrage');
+    out.push('');
+  }
+  return out.join('\n');
+}
+
+const fmtMMSS = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function parseMMSS(v) {
+  const m = String(v).trim().match(/^(\d{1,2})(?::([0-5]?\d))?$/);
+  return m ? (+m[1]) * 60 + (+(m[2] || 0)) : null;
+}
+
+/* ===================== Siegersong (eigene MP3, nur lokal im Browser gespeichert) ===================== */
+
+const SongStore = {
+  open() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('quiz-app', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  },
+  async run(mode, fn) {
+    const d = await this.open();
+    return new Promise((res, rej) => {
+      const t = d.transaction('files', mode), req = fn(t.objectStore('files'));
+      t.oncomplete = () => res(req.result ?? null);
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error || new Error('abgebrochen (Speicher voll?)'));
+    });
+  },
+  get(k) { return this.run('readonly', s => s.get(k)); },
+  set(k, v) { return this.run('readwrite', s => s.put(v, k)); },
+  del(k) { return this.run('readwrite', s => s.delete(k)); }
+};
+
+// play() → true (läuft), false (kein Song gespeichert), null (inzwischen gestoppt).
+// onEnd(false) = Song ließ sich nicht abspielen, onEnd(true) = zu Ende gelaufen.
+const Winner = {
+  audio: null, url: null, token: 0,
+  async play(startSec, onEnd) {
+    this.stop();
+    const my = this.token;
+    let rec = null;
+    try { rec = await SongStore.get('winner'); } catch (e) { /* kein IndexedDB */ }
+    if (my !== this.token) return null;
+    if (!rec || !rec.blob) return false;
+    this.url = URL.createObjectURL(rec.blob);
+    const a = new Audio(this.url);
+    this.audio = a;
+    const fail = () => { if (this.audio !== a) return; this.stop(); if (onEnd) onEnd(false); };
+    a.addEventListener('loadedmetadata', () => {
+      if (this.audio !== a) return;
+      const s = startSec || 0;
+      a.currentTime = isFinite(a.duration) && s > a.duration - 5 ? 0 : s;   // Start hinter Songende → von vorn
+      a.play().catch(fail);
+    }, { once: true });
+    a.addEventListener('error', fail, { once: true });
+    a.addEventListener('ended', () => { if (this.audio === a) { this.stop(); if (onEnd) onEnd(true); } });
+    return true;
+  },
+  stop() {
+    this.token++;
+    if (this.audio) { this.audio.pause(); this.audio = null; }
+    if (this.url) { URL.revokeObjectURL(this.url); this.url = null; }
+  }
+};
+
 // Reihenfolge der Antworten einmal pro Raum mischen; Wahr/Falsch bleibt, wie es ist
 function shuffleQuestion(q) {
   if (q.type !== 'mc' || q.poll || q.options.every(o => /^(wahr|falsch|richtig|ja|nein)$/i.test(o))) return q;
@@ -530,58 +761,292 @@ const Host = {
     this.state = null;
     this.clearLater();
     Sound.stopMusic();
+    Winner.stop();
     document.body.dataset.mood = '';
-    const settings = Object.assign({ time: 20, mode: 'schnell', board: true, shuffle: true, sound: true, phoneText: false, namegen: false },
+    const settings = Object.assign({ time: 20, mode: 'schnell', board: true, shuffle: true, sound: true, phoneText: false, namegen: false, winnerStart: 240 },
       store.get('quiz-host-settings') || {});
     const saveSettings = () => store.set('quiz-host-settings', settings);
     const saved = store.get('quiz-host-text');
-    const ta = h('textarea', { class: 'editor', spellcheck: 'false', 'aria-label': 'Fragen' });
-    ta.value = typeof saved === 'string' && saved.trim() ? saved : EXAMPLE;
-    const preview = h('div', { class: 'preview' });
+    // Die Fragen werden weiter als Text gespeichert (Datei laden/speichern bleibt möglich),
+    // bearbeitet werden sie aber im Kahoot-artigen Editor als Liste von Fragen.
+    let text = typeof saved === 'string' && saved.trim() ? saved : EXAMPLE;
+    let model = toModel(parseQuiz(text));
+    let cur = 0;
+    let textMode = store.get('quiz-editor-mode') === 'text';
     const startBtn = h('button', { class: 'btn big primary', onclick: () => go() }, 'Raum öffnen ▶');
+    const status = h('div', { class: 'ed-status' });
 
-    const update = () => {
-      const r = parseQuiz(ta.value);
-      store.set('quiz-host-text', ta.value);
-      startBtn.disabled = r.errors.length > 0;
-      preview.replaceChildren(
-        r.errors.length
-          ? h('div', { class: 'errors' }, h('b', null, `${r.errors.length} Problem${r.errors.length > 1 ? 'e' : ''}:`), h('ul', null, r.errors.map(e => h('li', null, e))))
-          : h('div', { class: 'okmsg' }, `✔ ${r.questions.length} Frage${r.questions.length > 1 ? 'n' : ''} bereit${r.title ? ' – „' + r.title + '“' : ''}`),
-        ...r.questions.map((q, i) => h('div', { class: 'pq' },
-          h('div', { class: 'pq-h' }, h('span', null, `${i + 1}. ${q.text}`),
-            h('span', { class: 'pq-t' }, q.poll ? h('span', { class: 'tag' }, 'Umfrage') : null, q.double ? h('span', { class: 'tag' }, '2× Punkte') : null, `${q.time || settings.time} s`)),
-          q.type === 'text'
-            ? h('div', { class: 'pq-o right' }, 'Freitext: ' + q.answers.join(' | '))
-            : q.options.map((o, j) => h('div', { class: 'pq-o' + (q.correct.includes(j) ? ' right' : '') }, h('span', { class: 'pq-s ' + COLORS[j] }, shapeEl(j)), o))
-        ))
-      );
+    const problems = q => {
+      const p = [];
+      if (!q.text.trim()) p.push('Fragetext fehlt');
+      if (q.kind === 'text') {
+        if (!q.answers.some(a => a.trim())) p.push('Mindestens eine richtige Antwort eintragen');
+      } else {
+        const filled = q.options.filter(o => o.t.trim());
+        if (filled.length < 2) p.push('Mindestens 2 Antworten ausfüllen');
+        if (q.kind !== 'poll' && !filled.some(o => o.ok)) p.push('Richtige Antwort mit dem Häkchen markieren');
+      }
+      if (q.image && !/^https?:\/\/\S+$/i.test(q.image)) p.push('Bild-Adresse muss mit https:// beginnen');
+      return p;
+    };
+    const check = () => {
+      const r = parseQuiz(text);
+      if (textMode) {
+        startBtn.disabled = r.errors.length > 0;
+        status.replaceChildren(r.errors.length
+          ? h('span', { class: 'bad' }, `${r.errors.length} Problem${r.errors.length > 1 ? 'e' : ''} – siehe rechts`)
+          : h('span', { class: 'good' }, `✔ ${r.questions.length} Fragen bereit`));
+        return r;
+      }
+      const bad = model.qs.map((q, i) => [i, problems(q)]).filter(([, p]) => p.length);
+      startBtn.disabled = !model.qs.length || bad.length > 0 || r.errors.length > 0;
+      status.replaceChildren(!model.qs.length ? h('span', { class: 'bad' }, 'Noch keine Frage')
+        : bad.length ? h('span', { class: 'bad' }, `Frage ${bad[0][0] + 1}: ${bad[0][1][0]}${bad.length > 1 ? ` (+${bad.length - 1} weitere)` : ''}`)
+          : r.errors.length ? h('span', { class: 'bad' }, r.errors[0])
+            : h('span', { class: 'good' }, `✔ ${model.qs.length} Frage${model.qs.length > 1 ? 'n' : ''} bereit`));
       return r;
     };
-    let debounce;
-    ta.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(update, 250); });
+    const commit = () => { text = fromModel(model); store.set('quiz-host-text', text); return check(); };
 
     const go = () => {
-      const r = update();
-      if (r.errors.length) return toast('Bitte erst die markierten Probleme beheben.');
+      if (textMode) text = ta.value;
+      const r = check();
+      if (startBtn.disabled) return toast('Bitte erst die markierten Probleme beheben.');
+      Sound.stopMusic();   // Vorschau aus „Musik anhören“ beenden
+      Winner.stop();
+      pi = -1;
+      musicBtn.textContent = 'Musik anhören ▶';
+      testBtn.textContent = 'Probehören';
       Sound.init();
       Sound.on = settings.sound;
       this.start(r, settings);
     };
 
+    /* ----- Spiel-Einstellungen (einmal gebaut, bleibt über Neuzeichnen erhalten) ----- */
     const select = (key, opts) => {
-      const s = h('select', { onchange: () => { settings[key] = /^\d+$/.test(s.value) ? +s.value : s.value; saveSettings(); update(); } },
+      const s = h('select', { onchange: () => { settings[key] = /^\d+$/.test(s.value) ? +s.value : s.value; saveSettings(); render(); } },
         opts.map(([v, l]) => h('option', { value: v, selected: String(settings[key]) === String(v) }, l)));
       return s;
     };
-    const check = (key, label) => h('label', { class: 'check' },
+    const checkbox = (key, label) => h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: !!settings[key], onchange: e => { settings[key] = e.target.checked; saveSettings(); } }), label);
+
+    const songList = [...Sound.SONGS.question.map((s, i) => ['question', i, s.name]), ...Sound.SONGS.lobby.map((s, i) => ['lobby', i, s.name])];
+    let pi = -1;
+    const musicBtn = h('button', { class: 'btn small', type: 'button' }, 'Musik anhören ▶');
+    musicBtn.addEventListener('click', () => {
+      Sound.init();
+      Winner.stop();
+      testBtn.textContent = 'Probehören';
+      pi++;
+      if (pi >= songList.length) { pi = -1; Sound.stopMusic(); musicBtn.textContent = 'Musik anhören ▶'; return; }
+      const [kind, idx, name] = songList[pi];
+      const wasOn = Sound.on;
+      Sound.on = true;
+      Sound.startPreview(kind, idx);
+      Sound.on = wasOn;
+      musicBtn.textContent = `♪ ${kind === 'lobby' ? 'Warteraum' : 'Frage'}: ${name} – weiter ▶`;
+    });
+
+    // Siegersong: eigene MP3, bleibt nur im Browser dieses Laptops (IndexedDB) – wird nie hochgeladen
+    const songName = h('span', { class: 'song-name' }, 'Kein Song gewählt – es kommt eine Fanfare');
+    SongStore.get('winner').then(rec => { if (rec) songName.textContent = rec.name; }).catch(() => {});
+    const songIn = h('input', { type: 'file', accept: 'audio/*,.mp3', style: 'display:none' });
+    songIn.addEventListener('change', async () => {
+      const f = songIn.files[0];
+      songIn.value = '';
+      if (!f) return;
+      try {
+        await SongStore.set('winner', { name: f.name, blob: f });
+        songName.textContent = f.name;
+        toast('Siegersong gespeichert – nur auf diesem Laptop');
+      } catch (e) { toast('Speichern fehlgeschlagen: ' + e.message, 6000); }
+    });
+    const startIn = h('input', { class: 'kq-inp mmss', maxlength: '5', 'aria-label': 'Start bei (mm:ss)' });
+    startIn.value = fmtMMSS(settings.winnerStart);
+    startIn.addEventListener('change', () => {
+      const s = parseMMSS(startIn.value);
+      if (s == null) { startIn.value = fmtMMSS(settings.winnerStart); return toast('Bitte als mm:ss eingeben, z. B. 4:00'); }
+      settings.winnerStart = s;
+      saveSettings();
+      startIn.value = fmtMMSS(s);
+    });
+    const testBtn = h('button', { class: 'btn small', type: 'button' }, 'Probehören');
+    testBtn.addEventListener('click', async () => {
+      Sound.stopMusic();
+      pi = -1;
+      musicBtn.textContent = 'Musik anhören ▶';
+      if (Winner.audio) { Winner.stop(); testBtn.textContent = 'Probehören'; return; }
+      testBtn.textContent = 'Stopp';
+      const ok = await Winner.play(settings.winnerStart, done => {
+        testBtn.textContent = 'Probehören';
+        if (done === false) toast('Die Datei lässt sich nicht abspielen – bitte eine andere MP3 wählen.', 6000);
+      });
+      if (ok === false) { testBtn.textContent = 'Probehören'; toast('Erst eine MP3 wählen'); }
+    });
+    const rmBtn = h('button', { class: 'btn small', type: 'button' }, 'Entfernen');
+    rmBtn.addEventListener('click', async () => {
+      Winner.stop();
+      testBtn.textContent = 'Probehören';
+      try { await SongStore.del('winner'); } catch (e) { /* egal */ }
+      songName.textContent = 'Kein Song gewählt – es kommt eine Fanfare';
+    });
+
+    const settingsCard = h('div', { class: 'card settings' },
+      h('h2', null, 'Spiel-Einstellungen'),
+      h('label', null, 'Zeit pro Frage (Standard)', select('time', [5, 10, 15, 20, 30, 45, 60, 90, 120, 240].map(s => [s, s + ' Sekunden']))),
+      h('label', null, 'Punkte', select('mode', [['schnell', 'Nach Schnelligkeit (500–1000)'], ['fest', 'Fest (1000 pro richtige)']])),
+      checkbox('autoTimer', 'Zeit startet automatisch 4 s nach der Frage (aus = erst auf Klick/Leertaste)'),
+      checkbox('board', 'Zwischenstand nach jeder Frage'),
+      checkbox('shuffle', 'Antworten zufällig mischen (außer Wahr/Falsch)'),
+      checkbox('phoneText', 'Fragen und Antworten auch auf den Handys zeigen (aus = nur Farben und Formen, wie Kahoot)'),
+      checkbox('namegen', 'Namensgenerator: Handys bekommen zufällige Spitznamen'),
+      checkbox('sound', 'Musik und Töne'),
+      musicBtn,
+      h('div', { class: 'song-box' },
+        h('b', null, 'Siegersong bei der Siegerehrung'),
+        h('div', { class: 'hint-dark' }, 'Eigene MP3, bleibt nur auf diesem Laptop und wird nicht hochgeladen.'),
+        h('div', { class: 'row-btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => songIn.click() }, 'MP3 wählen'), songName),
+        h('label', { class: 'inline' }, 'Start bei ', startIn, ' (Minute:Sekunde)'),
+        h('div', { class: 'row-btns' }, testBtn, rmBtn),
+        songIn));
+
+    /* ----- Kahoot-Editor: Fragenliste links, Frage in der Mitte, Fragen-Einstellungen rechts ----- */
+    let sideEl = null, probEl = null;
+    const live = () => {   // bei jedem Tastendruck: speichern, Liste links und Hinweise aktualisieren (ohne Fokusverlust)
+      commit();
+      if (sideEl) { const top = sideEl.scrollTop, n = sidebar(); sideEl.replaceWith(n); n.scrollTop = top; sideEl = n; }
+      if (probEl && model.qs[cur]) probEl.replaceChildren(...problems(model.qs[cur]).map(p => h('div', null, p)));
+    };
+    const change = () => { commit(); render(); };   // bei Umbauten: alles neu zeichnen
+
+    const sidebar = () => h('div', { class: 'kq-side' },
+      model.qs.map((q, i) => h('div', { class: 'kq-item' + (i === cur ? ' active' : '') + (problems(q).length ? ' bad' : ''), onclick: () => { cur = i; render(); } },
+        h('div', { class: 'kq-num' }, String(i + 1), h('span', null, KIND_LABEL[q.kind] + (q.double ? ' · 2×' : ''))),
+        h('div', { class: 'kq-prev' }, q.text || 'Neue Frage'),
+        h('div', { class: 'kq-dots' }, q.kind === 'text'
+          ? h('span', { class: 'kq-txt' }, 'Freitext')
+          : q.options.map((o, j) => h('span', { class: `kq-dot ${COLORS[j]}${o.ok && q.kind !== 'poll' ? ' ok' : ''}${o.t.trim() ? '' : ' empty'}` }))))),
+      h('button', { class: 'btn kq-add', onclick: () => { model.qs.splice(cur + 1, 0, newQuestion('quiz')); cur = Math.min(cur + 1, model.qs.length - 1); change(); } }, '+ Frage hinzufügen'));
+
+    const mainArea = () => {
+      const q = model.qs[cur];
+      if (!q) return h('div', { class: 'kq-main' }, h('div', { class: 'kq-empty' }, 'Noch keine Frage – links auf „+ Frage hinzufügen“ klicken.'));
+      const qText = h('textarea', { class: 'kq-q', rows: '2', maxlength: '200', placeholder: 'Frage eingeben' });
+      qText.value = q.text;
+      qText.addEventListener('input', () => { q.text = qText.value.replace(/\s*\n\s*/g, ' '); live(); });
+      let body;
+      if (q.kind === 'text') {
+        body = h('div', { class: 'kq-text' },
+          h('div', { class: 'kq-label' }, 'Richtige Antworten – Groß-/Kleinschreibung, Umlaute und Satzzeichen sind egal'),
+          q.answers.map((a, j) => {
+            const inp = h('input', { class: 'kq-inp', maxlength: '80', placeholder: j ? 'Andere Schreibweise (optional)' : 'Richtige Antwort' });
+            inp.value = a;
+            inp.addEventListener('input', () => { q.answers[j] = inp.value.replace(/\|/g, '/'); live(); });
+            return h('div', { class: 'kq-trow' }, inp,
+              q.answers.length > 1 ? h('button', { class: 'iconbtn', title: 'Entfernen', onclick: () => { q.answers.splice(j, 1); change(); } }, icon('cross')) : null);
+          }),
+          q.answers.length < 8 ? h('button', { class: 'btn small', onclick: () => { q.answers.push(''); change(); } }, '+ Weitere Schreibweise') : null);
+      } else {
+        body = h('div', { class: 'kq-answers' },
+          q.options.map((o, j) => {
+            const inp = h('input', { class: 'kq-ans-inp', maxlength: '150', readonly: q.kind === 'tf',
+              placeholder: `Antwort ${j + 1}${j >= 2 ? ' (optional)' : ''}` });
+            inp.value = o.t;
+            inp.addEventListener('input', () => { o.t = inp.value; live(); });
+            const ok = q.kind === 'poll' ? null : h('button', { class: 'kq-ok' + (o.ok ? ' on' : ''), title: o.ok ? 'Richtig – klicken zum Entfernen' : 'Als richtig markieren',
+              onclick: () => { if (q.kind === 'tf') { q.options.forEach(x => { x.ok = false; }); o.ok = true; } else o.ok = !o.ok; change(); } }, icon('check'));
+            const del = q.kind !== 'tf' && q.options.length > 2
+              ? h('button', { class: 'kq-del', title: 'Antwortfeld entfernen', onclick: () => { q.options.splice(j, 1); change(); } }, icon('cross')) : null;
+            return h('div', { class: `kq-ans ${COLORS[j]}${o.t.trim() ? '' : ' empty'}` }, h('span', { class: 'kq-shape' }, shapeEl(j)), inp, ok, del);
+          }),
+          q.kind !== 'tf' && q.options.length < 6
+            ? h('button', { class: 'kq-more', onclick: () => { q.options.push({ t: '', ok: false }); change(); } }, '+ Antwort hinzufügen') : null);
+      }
+      probEl = h('div', { class: 'kq-problems' }, problems(q).map(p => h('div', null, p)));
+      return h('div', { class: 'kq-main' },
+        h('div', { class: 'kq-nav' },
+          h('button', { class: 'btn small', disabled: cur === 0, onclick: () => { cur--; render(); } }, '◀ Vorherige'),
+          h('span', null, `Frage ${cur + 1} von ${model.qs.length}`),
+          h('button', { class: 'btn small', disabled: cur >= model.qs.length - 1, onclick: () => { cur++; render(); } }, 'Nächste ▶')),
+        qText,
+        /^https?:\/\//i.test(q.image) ? h('img', { class: 'kq-img', src: q.image, alt: '' }) : null,
+        body,
+        probEl);
+    };
+
+    const questionCard = () => {
+      const q = model.qs[cur];
+      if (!q) return null;
+      const typeSel = h('select', { onchange: () => { convertQuestion(q, typeSel.value); change(); } },
+        Object.entries(KIND_LABEL).map(([v, l]) => h('option', { value: v, selected: q.kind === v }, l)));
+      const timeSel = h('select', { onchange: () => { q.time = timeSel.value ? +timeSel.value : null; change(); } },
+        h('option', { value: '', selected: !q.time }, `Standard (${settings.time} s)`),
+        [...new Set([5, 10, 15, 20, 30, 45, 60, 90, 120, 240, ...(q.time ? [q.time] : [])])].sort((a, b) => a - b)
+          .map(s => h('option', { value: s, selected: q.time === s }, s + ' Sekunden')));
+      const ptsSel = h('select', { disabled: q.kind === 'poll', onchange: () => { q.double = ptsSel.value === '2'; change(); } },
+        h('option', { value: '1', selected: !q.double }, q.kind === 'poll' ? 'Keine (Umfrage)' : 'Standard'),
+        h('option', { value: '2', selected: q.double }, 'Doppelte Punkte'));
+      const imgIn = h('input', { class: 'kq-inp', placeholder: 'https://… (optional)' });
+      imgIn.value = q.image;
+      imgIn.addEventListener('input', () => { q.image = imgIn.value.trim(); live(); });
+      const delBtn = h('button', { class: 'btn small' }, 'Löschen');
+      let armedAt = 0;
+      delBtn.addEventListener('click', () => {
+        if (!delBtn.classList.contains('armed')) {
+          armedAt = Date.now();
+          delBtn.classList.add('armed');
+          delBtn.textContent = 'Wirklich löschen?';
+          setTimeout(() => { if (delBtn.isConnected) { delBtn.classList.remove('armed'); delBtn.textContent = 'Löschen'; } }, 3000);
+          return;
+        }
+        if (Date.now() - armedAt < 500) return;   // Doppelklick zählt nicht als Bestätigung
+        model.qs.splice(cur, 1);
+        cur = clamp(cur, 0, Math.max(0, model.qs.length - 1));
+        change();
+      });
+      const move = d => { const j = cur + d; if (j < 0 || j >= model.qs.length) return; [model.qs[cur], model.qs[j]] = [model.qs[j], model.qs[cur]]; cur = j; change(); };
+      return h('div', { class: 'card settings' },
+        h('h2', null, `Frage ${cur + 1}`),
+        h('label', null, 'Fragetyp', typeSel),
+        h('label', null, 'Zeitlimit', timeSel),
+        h('label', null, 'Punkte', ptsSel),
+        h('label', null, 'Bild (Internet-Adresse, nur auf dem Beamer)', imgIn),
+        h('div', { class: 'row-btns' },
+          h('button', { class: 'btn small', disabled: cur === 0, title: 'Nach oben', onclick: () => move(-1) }, '↑'),
+          h('button', { class: 'btn small', disabled: cur >= model.qs.length - 1, title: 'Nach unten', onclick: () => move(1) }, '↓'),
+          h('button', { class: 'btn small', onclick: () => { model.qs.splice(cur + 1, 0, JSON.parse(JSON.stringify(q))); cur++; change(); } }, 'Duplizieren'),
+          delBtn));
+    };
+
+    /* ----- Text-Ansicht (für Profis und zum Einfügen ganzer Fragenlisten) ----- */
+    const ta = h('textarea', { class: 'editor', spellcheck: 'false', 'aria-label': 'Fragen als Text' });
+    const textPreview = h('div', { class: 'preview' });
+    const updateText = () => {
+      text = ta.value;
+      store.set('quiz-host-text', text);
+      const r = check();
+      textPreview.replaceChildren(r.errors.length
+        ? h('div', { class: 'errors' }, h('b', null, `${r.errors.length} Problem${r.errors.length > 1 ? 'e' : ''}:`), h('ul', null, r.errors.map(e => h('li', null, e))))
+        : h('div', { class: 'okmsg' }, `✔ ${r.questions.length} Fragen bereit`));
+    };
+    let debounce;
+    ta.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(updateText, 250); });
 
     const fileIn = h('input', { type: 'file', accept: '.txt,.md,text/plain', style: 'display:none', onchange: () => {
       const f = fileIn.files[0];
       if (!f) return;
       const fr = new FileReader();
-      fr.onload = () => { ta.value = String(fr.result); update(); toast(`„${f.name}“ geladen`); };
+      fr.onload = () => {
+        text = String(fr.result);
+        store.set('quiz-host-text', text);
+        const r = parseQuiz(text);
+        model = toModel(r);
+        cur = 0;
+        render();
+        if (!textMode && r.errors.length) toast(`„${f.name}“ hat ${r.errors.length} Problem(e) – bitte „Als Text bearbeiten“ und prüfen.`, 8000);
+        else toast(`„${f.name}“ geladen`);
+      };
       fr.readAsText(f, 'utf-8');
       fileIn.value = '';
     } });
@@ -598,40 +1063,57 @@ const Host = {
       }).catch(() => {});
     }
 
-    document.body.dataset.view = 'editor';
-    view(h('div', { class: 'editor-page' },
-      h('header', { class: 'ed-head' },
+    const render = () => {
+      document.body.dataset.view = 'editor';
+      const titleIn = h('input', { class: 'kq-inp kq-title-in', maxlength: '80', placeholder: 'Titel des Quiz (optional)' });
+      titleIn.value = model.title;
+      titleIn.addEventListener('input', () => { model.title = titleIn.value; live(); });
+      const modeBtn = h('button', { class: 'btn small', onclick: () => {
+        if (textMode) {
+          clearTimeout(debounce);
+          text = ta.value;
+          const r = parseQuiz(text);
+          if (r.errors.length && !confirm(`Der Text hat noch ${r.errors.length} Problem(e). Nicht erkannte Zeilen gehen in der Fragen-Ansicht verloren. Trotzdem wechseln?`)) return;
+          model = toModel(r);
+          cur = clamp(cur, 0, Math.max(0, model.qs.length - 1));
+        }
+        textMode = !textMode;
+        store.set('quiz-editor-mode', textMode ? 'text' : 'visual');
+        if (!textMode) commit();   // Text an die Fragen-Ansicht angleichen, damit der Status stimmt
+        render();
+      } }, textMode ? 'Zur Fragen-Ansicht' : 'Als Text bearbeiten');
+      const header = h('header', { class: 'ed-head' },
         h('h1', null, 'Tutoriums-Quiz'),
-        h('span', { class: 'badge ' + (LOCAL ? 'warn' : 'good') }, LOCAL ? 'Testmodus' : 'Online (Firebase)')),
-      LOCAL ? h('div', { class: 'notice' }, HAS_FIREBASE
+        h('span', { class: 'badge ' + (LOCAL ? 'warn' : 'good') }, LOCAL ? 'Testmodus' : 'Online (Firebase)'),
+        h('div', { class: 'ed-head-r' },
+          modeBtn,
+          h('button', { class: 'btn small', onclick: () => fileIn.click() }, 'Datei laden'),
+          h('button', { class: 'btn small', onclick: () => download(((textMode ? parseQuiz(ta.value).title : model.title) || 'quiz').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-') + '.txt', textMode ? ta.value : text) }, 'Als Datei speichern'),
+          startBtn));
+      const notice = LOCAL ? h('div', { class: 'notice' }, HAS_FIREBASE
         ? 'Testmodus (backend=local): läuft nur zwischen Tabs in diesem Browser.'
-        : 'Testmodus: In config.js ist noch keine Firebase-Datenbank eingetragen. Handys können noch nicht beitreten – zum Ausprobieren im Warteraum „Test-Teilnehmer öffnen“ nutzen.') : null,
-      resumeBox,
-      h('div', { class: 'editor-wrap' },
-        h('section', null,
-          h('div', { class: 'row' },
-            h('h2', null, 'Fragen'),
-            h('div', { class: 'row-btns' },
-              h('button', { class: 'btn small', onclick: () => fileIn.click() }, 'Datei laden'),
-              h('button', { class: 'btn small', onclick: () => { const r = parseQuiz(ta.value); download((r.title || 'quiz').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-') + '.txt', ta.value); } }, 'Als Datei speichern'),
-              h('button', { class: 'btn small', onclick: () => { if (confirm('Den aktuellen Text durch das Beispiel ersetzen?')) { ta.value = EXAMPLE; update(); } } }, 'Beispiel'))),
-          ta, fileIn,
-          h('details', { class: 'help' }, h('summary', null, 'Format-Hilfe'),
-            h('pre', null, '# Titel des Quiz\n\n? Frage\n+ richtige Antwort\n- falsche Antwort\n- falsche Antwort\nZeit: 30          (optional)\nBild: https://…   (optional)\nPunkte: doppelt   (optional)\n\n? Freitext-Frage\n= Antwort | andere Schreibweise\n\n? Umfrage ohne Punkte\n- Option A\n- Option B\nTyp: Umfrage\n\nMehrere + sind erlaubt (jede davon zählt als richtig).\n2–6 Antworten pro Frage. Zeilen mit // werden ignoriert.'))),
-        h('section', null,
-          h('div', { class: 'card settings' },
-            h('h2', null, 'Einstellungen'),
-            h('label', null, 'Zeit pro Frage (Standard)', select('time', [10, 15, 20, 30, 45, 60, 90, 120].map(s => [s, s + ' Sekunden']))),
-            h('label', null, 'Punkte', select('mode', [['schnell', 'Nach Schnelligkeit (500–1000)'], ['fest', 'Fest (1000 pro richtige)']])),
-            check('board', 'Zwischenstand nach jeder Frage'),
-            check('shuffle', 'Antworten zufällig mischen (außer Wahr/Falsch)'),
-            check('phoneText', 'Fragen und Antworten auch auf den Handys zeigen (aus = nur Farben und Formen, wie Kahoot)'),
-            check('namegen', 'Namensgenerator: Handys bekommen zufällige Spitznamen'),
-            check('sound', 'Musik und Töne')),
-          preview,
-          h('div', { class: 'start-row' }, startBtn))
-      )));
-    update();
+        : 'Testmodus: In config.js ist noch keine Firebase-Datenbank eingetragen. Handys können noch nicht beitreten.') : null;
+      let content;
+      if (textMode) {
+        ta.value = text;
+        content = h('div', { class: 'editor-wrap' },
+          h('section', null, ta, fileIn,
+            h('div', { class: 'row-btns' }, h('button', { class: 'btn small', onclick: () => { if (confirm('Den aktuellen Text durch das Beispiel ersetzen?')) { ta.value = EXAMPLE; updateText(); } } }, 'Beispiel einfügen')),
+            h('details', { class: 'help' }, h('summary', null, 'Format-Hilfe'),
+              h('pre', null, '# Titel des Quiz\n\n? Frage\n+ richtige Antwort\n- falsche Antwort\n- falsche Antwort\nZeit: 30          (optional)\nBild: https://…   (optional)\nPunkte: doppelt   (optional)\n\n? Freitext-Frage\n= Antwort | andere Schreibweise\n\n? Umfrage ohne Punkte\n- Option A\n- Option B\nTyp: Umfrage\n\nMehrere + sind erlaubt (jede davon zählt als richtig).\n2–6 Antworten pro Frage. Zeilen mit // werden ignoriert.'))),
+          h('section', null, status, textPreview, settingsCard));
+      } else {
+        var sideTop = sideEl ? sideEl.scrollTop : 0;
+        sideEl = sidebar();
+        content = h('div', null,
+          h('div', { class: 'kq-titlebar' }, titleIn, status),
+          h('div', { class: 'kq' }, sideEl, mainArea(), h('div', { class: 'kq-right' }, questionCard(), settingsCard)),
+          fileIn);
+      }
+      view(h('div', { class: 'editor-page' + (textMode ? '' : ' wide') }, header, notice, resumeBox, content));
+      if (textMode) updateText(); else { sideEl.scrollTop = sideTop; check(); }
+    };
+    render();
   },
 
   /* ---------- Raum anlegen / fortsetzen ---------- */
@@ -791,7 +1273,8 @@ const Host = {
     Sound.stopMusic();
     this.setState({ phase: 'intro', qi, dur }, { question: pub, [`answers/${qi}`]: null, [`results/${qi}`]: null });
     Sound.gong();
-    this.later(() => this.goQuestion(), INTRO_MS);
+    // Standard: Frage steht ohne Zeit, bis der Tutor klickt (Leertaste). Optional automatisch nach 4 s.
+    if (this.settings.autoTimer) this.later(() => this.goQuestion(), INTRO_MS);
   },
 
   goQuestion() {
@@ -957,7 +1440,7 @@ const Host = {
     soundBtn.addEventListener('click', () => {
       Sound.on = !Sound.on;
       this.settings.sound = Sound.on;
-      if (!Sound.on) Sound.stopMusic();
+      if (!Sound.on) { Sound.stopMusic(); Winner.stop(); }
       else {
         Sound.init();
         if (st.phase === 'question' && !this.closing) Sound.startMusic();
@@ -1023,6 +1506,7 @@ const Host = {
       this.topbar()));
     makeQR(qr, joinUrl(this.code));
     this.updateChips(true);
+    Winner.stop();
     if (!Sound.music) Sound.startMusic('lobby');
   },
 
@@ -1075,8 +1559,12 @@ const Host = {
         h('div', { class: 'intro-num' }, `Frage ${this.state.qi + 1} von ${this.total()}`, this.tags(q)),
         h('div', { class: 'intro-card' }, q.text),
         q.image ? h('img', { class: 'q-img', src: q.image, alt: '' }) : null,
-        h('div', { class: 'intro-bar' }, h('div'))),
-      h('div', { class: 'host-actions' }, h('span'), h('button', { class: 'btn small', onclick: () => this.next() }, 'Überspringen')),
+        this.settings.autoTimer
+          ? h('div', { class: 'intro-bar' }, h('div'))
+          : h('button', { class: 'btn big', onclick: () => this.next() }, 'Antworten zeigen und Zeit starten')),
+      h('div', { class: 'host-actions' },
+        h('span', { class: 'hint' }, this.settings.autoTimer ? '' : 'Noch läuft keine Zeit – Leertaste startet'),
+        this.settings.autoTimer ? h('button', { class: 'btn small', onclick: () => this.next() }, 'Überspringen') : h('span')),
       this.topbar()));
   },
 
@@ -1215,7 +1703,14 @@ const Host = {
       this.topbar()));
     const show = (cls, ms) => this.later(() => { const el = $('.pod.' + cls); if (el) el.classList.add('show'); }, ms);
     show('p3', 600); show('p2', 1700);
-    this.later(() => { const el = $('.pod.p1'); if (el) el.classList.add('show'); confetti(5000); Sound.fanfare(); }, 2900);
+    this.later(() => {
+      const el = $('.pod.p1');
+      if (el) el.classList.add('show');
+      confetti(6000);
+      // Siegersong (falls im Editor gewählt) ab der eingestellten Stelle, sonst Fanfare
+      if (Sound.on) Winner.play(this.settings.winnerStart ?? 240, ok => { if (ok === false && Sound.on) Sound.fanfare(); })
+        .then(ok => { if (ok === false) Sound.fanfare(); });
+    }, 2900);
   },
 
   async exportCSV() {
