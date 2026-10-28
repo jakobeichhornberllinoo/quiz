@@ -9,6 +9,7 @@ const P = new URLSearchParams(location.search);
 const CFG = window.QUIZ_CONFIG || {};
 const HAS_FIREBASE = !!(CFG.firebase && CFG.firebase.databaseURL);
 const LOCAL = P.get('backend') === 'local' || !HAS_FIREBASE;
+const CLASSIC = !!CFG.classic;   // zweite Seite: klassisches Quiz ohne Show-Intro und ohne eigene MP3s
 const FB_SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const QR_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
 
@@ -710,6 +711,29 @@ function parseQuiz(text) {
   return { title, questions, errors };
 }
 
+/* ===================== Quiz-Sets: mehrere Fragenkataloge im Browser ===================== */
+
+const QuizLib = {
+  load() {
+    let lib = store.get('quiz-sets');
+    if (!lib || !lib.sets || !Object.keys(lib.sets).length) {
+      // Übernahme aus der Version mit nur einem Quiz; das alte Beispiel-Quiz wird nicht übernommen
+      const old = store.get('quiz-host-text');
+      const id = rid(6);
+      lib = { cur: id, sets: { [id]: { text: typeof old === 'string' && old.trim() && old !== EXAMPLE ? old : '' } } };
+      store.set('quiz-sets', lib);
+    }
+    if (!lib.sets[lib.cur]) lib.cur = Object.keys(lib.sets)[0];
+    return lib;
+  },
+  save(lib) { store.set('quiz-sets', lib); },
+  label(text, file) {
+    const r = parseQuiz(text || '');
+    const name = r.title || (String(text || '').trim() ? 'Ohne Titel' : 'Leeres Quiz');
+    return `${name} (${r.questions.length} Frage${r.questions.length === 1 ? '' : 'n'})${file ? ' – ' + file : ''}`;
+  }
+};
+
 /* ===================== Editor-Modell (Kahoot-artiger Editor ↔ Textformat) ===================== */
 
 const KIND_LABEL = { quiz: 'Quiz', tf: 'Wahr oder falsch', text: 'Freitext', poll: 'Umfrage' };
@@ -963,7 +987,10 @@ const Host = {
     const saved = store.get('quiz-host-text');
     // Die Fragen werden weiter als Text gespeichert (Datei laden/speichern bleibt möglich),
     // bearbeitet werden sie aber im Kahoot-artigen Editor als Liste von Fragen.
-    let text = typeof saved === 'string' && saved.trim() ? saved : EXAMPLE;
+    // Mehrere Quiz-Sets; beim allerersten Öffnen ein leeres Quiz (kein Beispiel mehr)
+    let lib = QuizLib.load();
+    let text = lib.sets[lib.cur].text || '';
+    const saveText = t => { text = t; lib.sets[lib.cur].text = t; QuizLib.save(lib); store.set('quiz-host-text', t); };
     let model = toModel(parseQuiz(text));
     let cur = 0;
     let textMode = store.get('quiz-editor-mode') === 'text';
@@ -1000,7 +1027,7 @@ const Host = {
             : h('span', { class: 'good' }, `✔ ${model.qs.length} Frage${model.qs.length > 1 ? 'n' : ''} bereit`));
       return r;
     };
-    const commit = () => { text = fromModel(model); store.set('quiz-host-text', text); return check(); };
+    const commit = () => { saveText(fromModel(model)); return check(); };
 
     const go = () => {
       if (textMode) text = ta.value;
@@ -1131,6 +1158,8 @@ const Host = {
       checkbox('shuffle', 'Antworten zufällig mischen (außer Wahr/Falsch)'),
       checkbox('phoneText', 'Fragen und Antworten auch auf den Handys zeigen (aus = nur Farben und Formen, wie Kahoot)'),
       checkbox('namegen', 'Namensgenerator: Handys bekommen zufällige Spitznamen'),
+      // Klassik-Version (config.js: classic: true): kein Show-Intro, keine eigenen MP3s – nur eingebaute Songs
+      CLASSIC ? [h('h2', null, 'Musik'), checkbox('sound', 'Musik und Töne'), musicBtn] : [
       h('h2', null, 'Show und Musik'),
       checkbox('showIntro', 'Show-Intro nach „Start“ (Lichtshow mit Logo, dann erst die erste Frage)'),
       h('label', null, 'Name der Show', titleIn),
@@ -1169,7 +1198,7 @@ const Host = {
         preview: { start: done => Winner.play(settings.winnerStart, done), stop: () => Winner.stop() },
         extra: [h('label', { class: 'inline' }, 'Start bei ', timeInput('winnerStart', 'Siegersong Start bei'), ' (Minute:Sekunde)')]
       }),
-      h('div', { class: 'hint-dark' }, 'Alle MP3s bleiben nur in diesem Browser auf diesem Laptop – nie zu GitHub hochladen.'));
+      h('div', { class: 'hint-dark' }, 'Alle MP3s bleiben nur in diesem Browser auf diesem Laptop – nie zu GitHub hochladen.')]);
 
     /* ----- Kahoot-Editor: Fragenliste links, Frage in der Mitte, Fragen-Einstellungen rechts ----- */
     let sideEl = null, probEl = null;
@@ -1191,7 +1220,7 @@ const Host = {
 
     const mainArea = () => {
       const q = model.qs[cur];
-      if (!q) return h('div', { class: 'kq-main' }, h('div', { class: 'kq-empty' }, 'Noch keine Frage – links auf „+ Frage hinzufügen“ klicken.'));
+      if (!q) return h('div', { class: 'kq-main' }, h('div', { class: 'kq-empty' }, 'Noch keine Frage – links auf „+ Frage hinzufügen“ klicken oder oben „Datei(en) laden“.'));
       const qText = h('textarea', { class: 'kq-q', rows: '2', maxlength: '200', placeholder: 'Frage eingeben' });
       qText.value = q.text;
       qText.addEventListener('input', () => { q.text = qText.value.replace(/\s*\n\s*/g, ' '); live(); });
@@ -1283,8 +1312,7 @@ const Host = {
     const ta = h('textarea', { class: 'editor', spellcheck: 'false', 'aria-label': 'Fragen als Text' });
     const textPreview = h('div', { class: 'preview' });
     const updateText = () => {
-      text = ta.value;
-      store.set('quiz-host-text', text);
+      saveText(ta.value);
       const r = check();
       textPreview.replaceChildren(r.errors.length
         ? h('div', { class: 'errors' }, h('b', null, `${r.errors.length} Problem${r.errors.length > 1 ? 'e' : ''}:`), h('ul', null, r.errors.map(e => h('li', null, e))))
@@ -1293,23 +1321,67 @@ const Host = {
     let debounce;
     ta.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(updateText, 250); });
 
-    const fileIn = h('input', { type: 'file', accept: '.txt,.md,text/plain', style: 'display:none', onchange: () => {
-      const f = fileIn.files[0];
-      if (!f) return;
-      const fr = new FileReader();
-      fr.onload = () => {
-        text = String(fr.result);
-        store.set('quiz-host-text', text);
-        const r = parseQuiz(text);
-        model = toModel(r);
-        cur = 0;
-        render();
-        if (!textMode && r.errors.length) toast(`„${f.name}“ hat ${r.errors.length} Problem(e) – bitte „Als Text bearbeiten“ und prüfen.`, 8000);
-        else toast(`„${f.name}“ geladen`);
-      };
-      fr.readAsText(f, 'utf-8');
+    // Ein Set öffnen (beim Wechsel wird das aktuelle vorher gespeichert)
+    const openSet = id => {
+      if (textMode) { clearTimeout(debounce); saveText(ta.value); }
+      lib.cur = id;
+      QuizLib.save(lib);
+      text = lib.sets[id].text || '';
+      store.set('quiz-host-text', text);
+      model = toModel(parseQuiz(text));
+      cur = 0;
+      render();
+    };
+    // Datei(en) laden: jede Datei wird ein eigenes Quiz-Set (ein leeres aktuelles Set wird dabei ersetzt)
+    const fileIn = h('input', { type: 'file', multiple: true, accept: '.txt,.md,text/plain', style: 'display:none', onchange: async () => {
+      const files = [...fileIn.files];
       fileIn.value = '';
+      if (!files.length) return;
+      if (textMode) { clearTimeout(debounce); saveText(ta.value); }
+      let firstId = null, problems = 0;
+      for (const f of files) {
+        const t = await f.text();
+        const id = !String(lib.sets[lib.cur].text || '').trim() && !firstId ? lib.cur : rid(6);
+        lib.sets[id] = { text: t, file: f.name };
+        if (parseQuiz(t).errors.length) problems++;
+        if (!firstId) firstId = id;
+      }
+      openSet(firstId);
+      toast(files.length === 1 ? `„${files[0].name}“ geladen` : `${files.length} Quiz-Sets geladen – oben bei „Quiz-Set“ umschalten`, 6000);
+      if (problems && !textMode) setTimeout(() => toast(`${problems} Datei(en) haben Probleme – bitte „Als Text bearbeiten“ und prüfen.`, 8000), 3000);
     } });
+    // Knopf, der erst nach einem zweiten Klick wirkt (gegen versehentliches Löschen)
+    const armed = (label, ask, action) => {
+      const b = h('button', { class: 'btn small', type: 'button' }, label);
+      let at = 0;
+      b.addEventListener('click', () => {
+        if (!b.classList.contains('armed')) {
+          at = Date.now();
+          b.classList.add('armed');
+          b.textContent = ask;
+          setTimeout(() => { if (b.isConnected) { b.classList.remove('armed'); b.textContent = label; } }, 3500);
+          return;
+        }
+        if (Date.now() - at < 500) return;
+        action();
+      });
+      return b;
+    };
+    const setBar = () => {
+      const sel = h('select', { class: 'set-sel', 'aria-label': 'Quiz-Set', onchange: () => openSet(sel.value) },
+        Object.entries(lib.sets).map(([id, s]) => h('option', { value: id, selected: id === lib.cur }, QuizLib.label(s.text, s.file))));
+      return h('div', { class: 'set-bar' },
+        h('b', null, 'Quiz-Set:'), sel,
+        h('button', { class: 'btn small', type: 'button', onclick: () => { if (textMode) { clearTimeout(debounce); saveText(ta.value); } const id = rid(6); lib.sets[id] = { text: '' }; openSet(id); } }, '+ Neues Set'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => fileIn.click() }, 'Datei(en) laden'),
+        armed('Alle Fragen löschen', 'Wirklich alle Fragen löschen?', () => { if (textMode) ta.value = ''; saveText(''); model = toModel(parseQuiz('')); cur = 0; render(); toast('Alle Fragen dieses Sets gelöscht'); }),
+        armed('Set löschen', 'Set wirklich löschen?', () => {
+          delete lib.sets[lib.cur];
+          if (!Object.keys(lib.sets).length) lib.sets[rid(6)] = { text: '' };
+          openSet(Object.keys(lib.sets)[0]);
+          toast('Set gelöscht');
+        }));
+    };
 
     const resumeBox = h('div');
     const sess = store.get('quiz-host-session');
@@ -1347,7 +1419,6 @@ const Host = {
         h('span', { class: 'badge ' + (LOCAL ? 'warn' : 'good') }, LOCAL ? 'Testmodus' : 'Online (Firebase)'),
         h('div', { class: 'ed-head-r' },
           modeBtn,
-          h('button', { class: 'btn small', onclick: () => fileIn.click() }, 'Datei laden'),
           h('button', { class: 'btn small', onclick: () => download(((textMode ? parseQuiz(ta.value).title : model.title) || 'quiz').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-') + '.txt', textMode ? ta.value : text) }, 'Als Datei speichern'),
           startBtn));
       const notice = LOCAL ? h('div', { class: 'notice' }, HAS_FIREBASE
@@ -1370,7 +1441,7 @@ const Host = {
           h('div', { class: 'kq' }, sideEl, mainArea(), h('div', { class: 'kq-right' }, questionCard(), settingsCard)),
           fileIn);
       }
-      view(h('div', { class: 'editor-page' + (textMode ? '' : ' wide') }, header, notice, resumeBox, content));
+      view(h('div', { class: 'editor-page' + (textMode ? '' : ' wide') }, header, notice, resumeBox, setBar(), content));
       if (textMode) updateText(); else { sideEl.scrollTop = sideTop; check(); }
     };
     render();
@@ -1426,6 +1497,7 @@ const Host = {
   // Eigene Quizmusik laden (falls im Editor gewählt): während der Fragen, auf Wunsch auch im Warteraum
   async loadOwnMusic() {
     Sound.silence();
+    if (CLASSIC) { [OwnMusic, CountMusic, IntroMusic].forEach(m => m.unload()); return; }   // Klassik: nur eingebaute Songs
     await OwnMusic.load();
     await CountMusic.load();
     await IntroMusic.load();
@@ -1533,7 +1605,7 @@ const Host = {
         if (!this.count()) return toast('Noch niemand beigetreten.');
         Sound.init();
         // Show-Intro (Logo + Intro-Sound) vor der ersten Frage, abschaltbar im Editor
-        return this.settings.showIntro === false ? this.goIntro(0)
+        return CLASSIC || this.settings.showIntro === false ? this.goIntro(0)
           : this.setState({ phase: 'show', qi: -1, title: this.settings.showTitle || SHOW_TITLE });
       case 'show': return this.goIntro(0);
       case 'intro': return this.goQuestion();
@@ -2025,7 +2097,8 @@ const Host = {
       if (el) el.classList.add('show');
       confetti(6000);
       // Siegersong (falls im Editor gewählt) ab der eingestellten Stelle, sonst Fanfare
-      if (Sound.on) Winner.play(this.settings.winnerStart ?? 240, ok => { if (ok === false && Sound.on) Sound.fanfare(); })
+      if (Sound.on && CLASSIC) Sound.fanfare();
+      else if (Sound.on) Winner.play(this.settings.winnerStart ?? 240, ok => { if (ok === false && Sound.on) Sound.fanfare(); })
         .then(ok => { if (ok === false) Sound.fanfare(); });
     }, 2900);
   },

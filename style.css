@@ -138,6 +138,8 @@ textarea.editor:focus { outline: 2px solid var(--purple-light); }
 .ed-status { font-weight: 700; font-size: .95rem; }
 .ed-status .bad { color: #b0001f; }
 .ed-status .good { color: #1f6b06; }
+.set-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #fff; border-radius: var(--radius); padding: 10px 12px; box-shadow: 0 2px 4px rgba(0, 0, 0, .12); }
+.set-sel { font: inherit; font-weight: 700; padding: 7px 10px; border: 1px solid #ccc; border-radius: var(--radius); min-width: 260px; max-width: 100%; background: #fff; color: var(--dark); }
 .kq-titlebar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
 .kq-inp { font: inherit; font-size: 1rem; padding: 8px 10px; border: 1px solid #ccc; border-radius: var(--radius); background: #fff; color: var(--dark); width: 100%; }
 .kq-inp:focus { outline: 2px solid var(--purple-light); border-color: transparent; }
